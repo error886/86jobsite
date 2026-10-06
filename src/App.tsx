@@ -1,0 +1,1309 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { 
+  Search, MapPin, Briefcase, Filter, Heart, SlidersHorizontal, 
+  Map as MapIcon, ChevronRight, BookmarkCheck, CheckCircle2, 
+  AlertCircle, Sparkles, Loader2, ArrowRight, Columns, BarChart3,
+  History, Trash2, X
+} from 'lucide-react';
+import Header from './components/Header';
+import MapContainer from './components/MapContainer';
+import JobCard from './components/JobCard';
+import JobDetailDrawer from './components/JobDetailDrawer';
+import AIParsingTool from './components/AIParsingTool';
+import AdminPanel from './components/AdminPanel';
+import ContactModal from './components/ContactModal';
+import Logo from './components/Logo';
+import SalaryChart from './components/SalaryChart';
+import AuthModal from './components/AuthModal';
+import { Job, User, Bookmark, RecentSearchItem } from './types';
+import { INITIAL_JOBS } from './data/initialJobs';
+import { auth, db, logoutFirebase } from './lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+
+const formatFilterLabel = (
+  q: string,
+  city: string,
+  cat: string,
+  salType: string,
+  minSal: string
+): string => {
+  const parts: string[] = [];
+  if (q.trim()) parts.push(`"${q.trim()}"`);
+  if (city !== 'All') parts.push(city);
+  if (cat !== 'All') {
+    const catMap: Record<string, string> = {
+      Restaurant: 'Nhà hàng',
+      Cafe: 'Cà phê',
+      Factory: 'Nhà xưởng',
+      Warehouse: 'Kho bãi',
+      'Convenience Store': 'Cửa hàng tiện lợi',
+      Office: 'Văn phòng',
+      Other: 'Khác',
+    };
+    parts.push(catMap[cat] || cat);
+  }
+  if (salType !== 'All') parts.push(salType === 'Hourly' ? 'Theo giờ' : 'Theo tháng');
+  if (minSal.trim()) parts.push(`≥${minSal.trim()} KRW`);
+  return parts.length > 0 ? parts.join(' • ') : 'Tất cả việc làm';
+};
+
+export default function App() {
+  const [jobs, setJobs] = useState<Job[]>(() => INITIAL_JOBS.filter(j => j.status === 'approved'));
+  const [adminJobsList, setAdminJobsList] = useState<Job[]>(INITIAL_JOBS); // Full list including pending for Admin
+  const [loading, setLoading] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<'list' | 'chart'>('list');
+  
+  // Auth state (Default to guest / null)
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('86job_user');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) { return null; }
+    }
+    return null;
+  });
+
+  // Auth Modal State
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalTab, setAuthModalTab] = useState<'login' | 'register'>('login');
+  const [authPromptMessage, setAuthPromptMessage] = useState<string>('');
+
+  const openAuthModal = (tab: 'login' | 'register' = 'login', promptMessage: string = '') => {
+    setAuthModalTab(tab);
+    setAuthPromptMessage(promptMessage);
+    setAuthModalOpen(true);
+  };
+
+  // Sync Firebase Auth state with App state
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        try {
+          const userDocRef = doc(db, 'users', fbUser.uid);
+          const snap = await getDoc(userDocRef);
+          if (snap.exists()) {
+            const userData = snap.data() as User;
+            const fullUser = { ...userData, id: fbUser.uid };
+            setCurrentUser(fullUser);
+            localStorage.setItem('86job_user', JSON.stringify(fullUser));
+          } else {
+            const newUser: User = {
+              id: fbUser.uid,
+              name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Người dùng',
+              email: fbUser.email || '',
+              avatar: fbUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(fbUser.email || 'user')}`,
+              role: (fbUser.email === 'lechidaicma@gmail.com' || fbUser.email === 'cuong.soft86@gmail.com') ? 'admin' : 'user',
+              createdAt: new Date().toISOString()
+            };
+            setCurrentUser(newUser);
+            localStorage.setItem('86job_user', JSON.stringify(newUser));
+          }
+        } catch (e) {
+          console.warn("Firebase Auth state fetch error:", e);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Bookmark state
+  const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
+  
+  // Geolocation User Location State
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+
+  const handleLocateUser = () => {
+    if (!navigator.geolocation) return;
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setIsLocating(false);
+      },
+      (err) => {
+        console.warn('Geolocation error:', err);
+        setIsLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  };
+
+  useEffect(() => {
+    handleLocateUser();
+  }, []);
+
+  // View/Route control
+  const [activeTab, setActiveTab] = useState<string>('jobs');
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [contactOpen, setContactOpen] = useState(false);
+  const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [mobileLayoutMode, setMobileLayoutMode] = useState<'cards' | 'split' | 'list'>('cards');
+
+  // Mobile Bottom Sheet Draggable Panel Height
+  const [mobileHeightPercent, setMobileHeightPercent] = useState(58);
+  const dragStartY = useRef<number>(0);
+  const dragStartHeight = useRef<number>(0);
+  const isDragging = useRef<boolean>(false);
+
+  // Swipe Container Refs & Flag to prevent selection scroll-loop
+  const swipeContainerRef = useRef<HTMLDivElement | null>(null);
+  const isAutoScrolling = useRef<boolean>(false);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    isDragging.current = true;
+    dragStartY.current = e.touches[0].clientY;
+    dragStartHeight.current = mobileHeightPercent;
+    document.body.style.userSelect = 'none';
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isDragging.current) return;
+    const clientY = e.touches[0].clientY;
+    const deltaY = clientY - dragStartY.current;
+    const containerHeight = window.innerHeight - 64;
+    const deltaPercent = (deltaY / containerHeight) * 100;
+    let newHeight = dragStartHeight.current - deltaPercent;
+    if (newHeight < 15) newHeight = 15;
+    if (newHeight > 85) newHeight = 85;
+    setMobileHeightPercent(newHeight);
+  };
+
+  const handleTouchEnd = () => {
+    isDragging.current = false;
+    document.body.style.userSelect = '';
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    isDragging.current = true;
+    dragStartY.current = e.clientY;
+    dragStartHeight.current = mobileHeightPercent;
+    document.body.style.userSelect = 'none';
+    
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaY = moveEvent.clientY - dragStartY.current;
+      const containerHeight = window.innerHeight - 64;
+      const deltaPercent = (deltaY / containerHeight) * 100;
+      let newHeight = dragStartHeight.current - deltaPercent;
+      if (newHeight < 15) newHeight = 15;
+      if (newHeight > 85) newHeight = 85;
+      setMobileHeightPercent(newHeight);
+    };
+    
+    const handleMouseUp = () => {
+      isDragging.current = false;
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // Advanced Filters State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [cityFilter, setCityFilter] = useState('All');
+  const [categoryFilter, setCategoryFilter] = useState('All');
+  const [salaryTypeFilter, setSalaryTypeFilter] = useState('All');
+  const [minSalaryFilter, setMinSalaryFilter] = useState('');
+  const [showSavedOnly, setShowSavedOnly] = useState(false);
+  const [hideSwipeCards, setHideSwipeCards] = useState(true);
+  const [isDrawerMinimized, setIsDrawerMinimized] = useState(false);
+
+  // Recent Searches stored in localStorage (last 5 filter combinations)
+  const [recentSearches, setRecentSearches] = useState<RecentSearchItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('86job_recent_searches');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not load recent searches from localStorage:', e);
+    }
+    return [];
+  });
+
+  // Automatically save filter combination to recent searches (debounced)
+  useEffect(() => {
+    const isDefault =
+      !searchQuery.trim() &&
+      cityFilter === 'All' &&
+      categoryFilter === 'All' &&
+      salaryTypeFilter === 'All' &&
+      !minSalaryFilter.trim();
+
+    if (isDefault) return;
+
+    const timer = setTimeout(() => {
+      const qVal = searchQuery.trim();
+      const minSalVal = minSalaryFilter.trim();
+      const newLabel = formatFilterLabel(qVal, cityFilter, categoryFilter, salaryTypeFilter, minSalVal);
+
+      setRecentSearches((prev) => {
+        const filtered = prev.filter((item) => {
+          return !(
+            item.searchQuery.toLowerCase() === qVal.toLowerCase() &&
+            item.cityFilter === cityFilter &&
+            item.categoryFilter === categoryFilter &&
+            item.salaryTypeFilter === salaryTypeFilter &&
+            item.minSalaryFilter === minSalVal
+          );
+        });
+
+        const nextItem: RecentSearchItem = {
+          id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          label: newLabel,
+          searchQuery: qVal,
+          cityFilter,
+          categoryFilter,
+          salaryTypeFilter,
+          minSalaryFilter: minSalVal,
+          timestamp: Date.now(),
+        };
+
+        const updated = [nextItem, ...filtered].slice(0, 5);
+        try {
+          localStorage.setItem('86job_recent_searches', JSON.stringify(updated));
+        } catch (e) {
+          console.warn('Could not save recent searches to localStorage:', e);
+        }
+        return updated;
+      });
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, cityFilter, categoryFilter, salaryTypeFilter, minSalaryFilter]);
+
+  const handleSelectRecentSearch = (item: RecentSearchItem) => {
+    setSearchQuery(item.searchQuery);
+    setCityFilter(item.cityFilter);
+    setCategoryFilter(item.categoryFilter);
+    setSalaryTypeFilter(item.salaryTypeFilter);
+    setMinSalaryFilter(item.minSalaryFilter);
+    setActiveTab('jobs');
+  };
+
+  const handleRemoveRecentSearch = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRecentSearches((prev) => {
+      const updated = prev.filter((item) => item.id !== id);
+      try {
+        localStorage.setItem('86job_recent_searches', JSON.stringify(updated));
+      } catch (err) {
+        console.warn('Failed to update localStorage after removing recent search:', err);
+      }
+      return updated;
+    });
+  };
+
+  const handleClearRecentSearches = () => {
+    setRecentSearches([]);
+    try {
+      localStorage.removeItem('86job_recent_searches');
+    } catch (err) {
+      console.warn('Failed to clear localStorage recent searches:', err);
+    }
+  };
+
+  // Compute displayed jobs based on normal filters and showSavedOnly toggle
+  const displayedJobs = showSavedOnly ? jobs.filter(j => bookmarkedIds.includes(j.id)) : jobs;
+
+  // Automatically reveal swipe cards when a job is selected (unless minimized for map viewing)
+  useEffect(() => {
+    if (selectedJob) {
+      if (!isDrawerMinimized) {
+        setHideSwipeCards(false);
+      }
+    } else {
+      setIsDrawerMinimized(false);
+    }
+  }, [selectedJob, isDrawerMinimized]);
+
+  // Auto-scroll center active card on mobile
+  useEffect(() => {
+    if (selectedJob && mobileLayoutMode === 'cards') {
+      const cardEl = document.getElementById(`job-card-${selectedJob.id}`);
+      if (cardEl) {
+        isAutoScrolling.current = true;
+        cardEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        
+        // Release lock after smooth scroll completes
+        const timeout = setTimeout(() => {
+          isAutoScrolling.current = false;
+        }, 600);
+        return () => clearTimeout(timeout);
+      }
+    }
+  }, [selectedJob, mobileLayoutMode]);
+
+  // Swipe detection scroll handler - updates map center when swiping cards
+  const handleSwipeScroll = () => {
+    if (isAutoScrolling.current) return;
+    const container = swipeContainerRef.current;
+    if (!container) return;
+
+    const children = Array.from(container.children) as HTMLElement[];
+    if (children.length === 0) return;
+
+    // Center of the scroll viewport
+    const containerCenter = container.scrollLeft + container.clientWidth / 2;
+
+    let closestJobId: string | null = null;
+    let minDistance = Infinity;
+
+    children.forEach((child) => {
+      const childCenter = child.offsetLeft + child.clientWidth / 2;
+      const distance = Math.abs(childCenter - containerCenter);
+      if (distance < minDistance) {
+        minDistance = distance;
+        const idParts = child.id.split('job-card-');
+        if (idParts.length > 1) {
+          closestJobId = idParts[1];
+        }
+      }
+    });
+
+    if (closestJobId) {
+      const foundJob = jobs.find(j => String(j.id) === closestJobId);
+      if (foundJob && selectedJob?.id !== foundJob.id) {
+        setSelectedJob(foundJob);
+      }
+    }
+  };
+
+  // Fetch Jobs from backend API with client fallback
+  const fetchJobs = async () => {
+    try {
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (searchQuery) params.append('q', searchQuery);
+      if (cityFilter && cityFilter !== 'All') params.append('city', cityFilter);
+      if (categoryFilter && categoryFilter !== 'All') params.append('category', categoryFilter);
+      if (salaryTypeFilter && salaryTypeFilter !== 'All') params.append('salaryType', salaryTypeFilter);
+      if (minSalaryFilter) params.append('minSalary', minSalaryFilter);
+
+      const res = await fetch(`/api/jobs?${params.toString()}`).catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json();
+        setJobs(data);
+      } else {
+        // Fallback to local filtering if backend unavailable
+        let filtered = INITIAL_JOBS.filter(j => j.status === 'approved');
+        if (searchQuery) {
+          const s = searchQuery.toLowerCase();
+          filtered = filtered.filter(j => j.title.toLowerCase().includes(s) || j.company.toLowerCase().includes(s) || j.city.toLowerCase().includes(s));
+        }
+        if (cityFilter && cityFilter !== 'All') filtered = filtered.filter(j => j.city.toLowerCase() === cityFilter.toLowerCase());
+        if (categoryFilter && categoryFilter !== 'All') filtered = filtered.filter(j => j.category === categoryFilter);
+        if (salaryTypeFilter && salaryTypeFilter !== 'All') filtered = filtered.filter(j => j.salaryType === salaryTypeFilter);
+        if (minSalaryFilter) filtered = filtered.filter(j => j.salary >= parseInt(minSalaryFilter, 10));
+        setJobs(filtered);
+      }
+    } catch (err) {
+      console.warn('Jobs fetch notice:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch full list for Admin
+  const fetchAdminJobs = async () => {
+    if (currentUser?.role !== 'admin') return;
+    try {
+      const r1 = await fetch('/api/jobs?status=approved').catch(() => null);
+      const r2 = await fetch('/api/jobs?status=pending').catch(() => null);
+      const r3 = await fetch('/api/jobs?status=rejected').catch(() => null);
+      
+      const approved = r1 && r1.ok ? await r1.json() : INITIAL_JOBS.filter(j => j.status === 'approved');
+      const pending = r2 && r2.ok ? await r2.json() : INITIAL_JOBS.filter(j => j.status === 'pending');
+      const rejected = r3 && r3.ok ? await r3.json() : INITIAL_JOBS.filter(j => j.status === 'rejected');
+
+      setAdminJobsList([...pending, ...approved, ...rejected]);
+    } catch (err) {
+      console.warn('Admin jobs fetch notice:', err);
+    }
+  };
+
+  // Fetch user bookmarks from backend
+  const fetchBookmarks = async () => {
+    if (!currentUser) {
+      setBookmarkedIds([]);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/bookmarks/${currentUser.id}`).catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json();
+        setBookmarkedIds(data.map((b: Bookmark) => b.jobId));
+      }
+    } catch (err) {
+      console.warn('Bookmarks fetch notice:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchJobs();
+    if (currentUser?.role === 'admin') {
+      fetchAdminJobs();
+    }
+  }, [searchQuery, cityFilter, categoryFilter, salaryTypeFilter, minSalaryFilter, activeTab]);
+
+  useEffect(() => {
+    fetchBookmarks();
+    if (currentUser?.role === 'admin') {
+      fetchAdminJobs();
+    }
+  }, [currentUser]);
+
+  // Handle Quick Search Suggestions
+  const handleQuickSearch = (keyword: string, cityVal?: string, catVal?: string) => {
+    setSearchQuery(keyword);
+    if (cityVal) setCityFilter(cityVal);
+    if (catVal) setCategoryFilter(catVal);
+    setActiveTab('jobs');
+  };
+
+  // Reset all filters
+  const handleResetFilters = () => {
+    setSearchQuery('');
+    setCityFilter('All');
+    setCategoryFilter('All');
+    setSalaryTypeFilter('All');
+    setMinSalaryFilter('');
+    fetchJobs();
+  };
+
+  // Bookmarking Toggle
+  const handleToggleBookmark = async (jobId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    if (!currentUser) {
+      openAuthModal('login', '🔒 Vui lòng đăng nhập để lưu công việc này vào danh sách yêu thích!');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/bookmarks/toggle', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ userId: currentUser.id, jobId })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.bookmarked) {
+          setBookmarkedIds(prev => [...prev, jobId]);
+        } else {
+          setBookmarkedIds(prev => prev.filter(id => id !== jobId));
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Auth logins & persistance
+  const handleLogin = (email: string, name: string, avatar: string, role: 'user' | 'admin') => {
+    const user: User = {
+      id: auth.currentUser?.uid || (email === 'lechidaicma@gmail.com' ? 'u2' : `u_${Date.now()}`),
+      name,
+      email,
+      avatar,
+      role,
+      createdAt: new Date().toISOString()
+    };
+    setCurrentUser(user);
+    localStorage.setItem('86job_user', JSON.stringify(user));
+  };
+
+  const handleLogout = () => {
+    logoutFirebase();
+    setCurrentUser(null);
+    localStorage.removeItem('86job_user');
+    setBookmarkedIds([]);
+    if (activeTab === 'bookmarks' || activeTab === 'admin') {
+      setActiveTab('jobs');
+    }
+  };
+
+  // MODERATOR ACTIONS
+  const handleStatusUpdate = async (jobId: string, status: 'approved' | 'rejected') => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      if (res.ok) {
+        fetchAdminJobs();
+        fetchJobs();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteJob = async (jobId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn xóa vĩnh viễn công việc này khỏi hệ thống?')) return;
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchAdminJobs();
+        fetchJobs();
+        if (selectedJob?.id === jobId) {
+          setSelectedJob(null);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSimulateCrawl = async (source: string, url: string) => {
+    try {
+      const res = await fetch('/api/crawler/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, url })
+      });
+      if (res.ok) {
+        fetchAdminJobs();
+        fetchJobs();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Trigger when new job created from AI Parser
+  const handleNewJobCreated = (newJob: Job) => {
+    setJobs(prev => [newJob, ...prev]);
+    if (currentUser?.role === 'admin') {
+      fetchAdminJobs();
+    }
+  };
+
+  const handleNavTabChange = (tab: string) => {
+    if (tab === 'chart') {
+      setActiveTab('jobs');
+      setSidebarTab('chart');
+    } else {
+      setActiveTab(tab);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-800 font-sans selection:bg-blue-100 selection:text-blue-800">
+      
+      {/* HEADER */}
+      <Header 
+        currentUser={currentUser}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+        activeTab={sidebarTab === 'chart' && activeTab === 'jobs' ? 'chart' : activeTab}
+        setActiveTab={handleNavTabChange}
+        onOpenContact={() => setContactOpen(true)}
+        onOpenAuthModal={(tab) => openAuthModal(tab || 'login')}
+      />
+
+      {/* CONTACT MODAL */}
+      <ContactModal isOpen={contactOpen} onClose={() => setContactOpen(false)} />
+
+      {/* MAIN CONTAINER */}
+      {activeTab === 'jobs' ? (
+        // Map-Centric Explorer Layout (no separate container limits, expands 100% height)
+        <div className="w-full h-[calc(100vh-4rem)] flex flex-col-reverse lg:flex-row relative overflow-hidden bg-slate-50 animate-in fade-in duration-300">
+          
+          {/* LEFT SIDE PANEL (Sidebar with Filters & Results) */}
+          <aside 
+            style={
+              typeof window !== 'undefined' && window.innerWidth < 1024 
+                ? (mobileLayoutMode === 'split' 
+                    ? { height: `${mobileHeightPercent}vh`, flex: 'none' } 
+                    : mobileLayoutMode === 'list' 
+                      ? { height: '100%', flex: '1' } 
+                      : { display: 'none' }) 
+                : undefined
+            }
+            className={`w-full lg:w-[420px] xl:w-[460px] flex-shrink-0 bg-white lg:border-r border-slate-200/80 flex flex-col z-10 transition-all ${
+              mobileLayoutMode === 'cards' ? 'hidden lg:flex' : 'flex'
+            } h-0 overflow-hidden rounded-t-[2rem] border-t border-slate-200/80 lg:rounded-t-none lg:border-t-0 lg:h-full shadow-[0_-10px_30px_rgba(0,0,0,0.06)] lg:shadow-none`}
+          >
+            
+            {/* Mobile Drag Handle for Split View */}
+            <div 
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onMouseDown={handleMouseDown}
+              className="lg:hidden flex justify-center pt-3.5 pb-2 bg-slate-50/50 cursor-ns-resize active:bg-slate-100 transition-colors"
+            >
+              <div className="w-12 h-1.5 bg-slate-300 rounded-full" />
+            </div>
+            
+            {/* Sidebar Branding & Summary */}
+            <div className="p-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 gap-2">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <Logo className="h-6.5 w-auto" />
+                  <span className="text-[10px] bg-blue-50 text-blue-600 font-extrabold px-1.5 py-0.5 rounded border border-blue-200/30">Hàn Quốc</span>
+                </div>
+                <p className="text-[10px] text-slate-400 font-medium mt-0.5">Bản đồ & Biểu đồ lương du học sinh</p>
+              </div>
+
+              {/* Sidebar View Switcher */}
+              <div className="flex bg-slate-200/60 p-0.5 rounded-xl text-[10.5px] font-bold border border-slate-200/80">
+                <button
+                  onClick={() => setSidebarTab('list')}
+                  className={`px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer ${
+                    sidebarTab === 'list'
+                      ? 'bg-white text-blue-600 shadow-xs font-extrabold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Briefcase className="w-3 h-3" />
+                  <span>Tin tuyển</span>
+                </button>
+                <button
+                  onClick={() => setSidebarTab('chart')}
+                  className={`px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer ${
+                    sidebarTab === 'chart'
+                      ? 'bg-white text-blue-600 shadow-xs font-extrabold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <BarChart3 className="w-3 h-3 text-amber-500" />
+                  <span>Phân bổ lương</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Sidebar Search and Filters panel */}
+            <div className="p-3.5 border-b border-slate-100 space-y-2.5 bg-white">
+              {/* Search bar */}
+              <div className="relative flex items-center bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-2 focus-within:border-blue-500/80 focus-within:bg-white transition-all shadow-sm">
+                <Search className="w-4 h-4 text-slate-400 flex-shrink-0 mr-2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Tìm việc, khu vực, xưởng, quán ăn..."
+                  className="w-full bg-transparent text-xs font-bold outline-none text-slate-800"
+                />
+                {searchQuery && (
+                  <button 
+                    onClick={() => setSearchQuery('')}
+                    className="text-slate-400 hover:text-slate-600 font-bold text-xs cursor-pointer p-0.5 px-1.5"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {/* Integrated Filters selectors */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Khu vực</label>
+                  <select
+                    value={cityFilter}
+                    onChange={(e) => setCityFilter(e.target.value)}
+                    className="w-full p-2 rounded-lg border border-slate-200 bg-slate-50/50 text-[11px] font-bold text-slate-700 outline-none cursor-pointer"
+                  >
+                    <option value="All">Tất cả TP</option>
+                    <option value="Seoul">Seoul (서울)</option>
+                    <option value="Daejeon">Daejeon (대전)</option>
+                    <option value="Busan">Busan (부산)</option>
+                    <option value="Incheon">Incheon (인천)</option>
+                    <option value="Gyeonggi">Gyeonggi (경기)</option>
+                    <option value="Gwangju">Gwangju (광주)</option>
+                    <option value="Daegu">Daegu (대구)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Ngành nghề</label>
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => setCategoryFilter(e.target.value)}
+                    className="w-full p-2 rounded-lg border border-slate-200 bg-slate-50/50 text-[11px] font-bold text-slate-700 outline-none cursor-pointer"
+                  >
+                    <option value="All">Tất cả ngành</option>
+                    <option value="Restaurant">Nhà hàng / Quán ăn</option>
+                    <option value="Cafe">Cà phê / Bánh ngọt</option>
+                    <option value="Factory">Nhà xưởng / Công xưởng</option>
+                    <option value="Warehouse">Kho bãi</option>
+                    <option value="Convenience Store">Cửa hàng tiện lợi</option>
+                    <option value="Office">Văn phòng / Dịch thuật</option>
+                    <option value="Other">Khác</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Collapsible toggle for Advanced Filters (Salary) */}
+              <div className="pt-0.5 flex items-center justify-between">
+                <button
+                  onClick={() => setShowFilters(!showFilters)}
+                  className="flex items-center gap-1 text-[11px] font-bold text-blue-600 hover:text-blue-700 cursor-pointer"
+                >
+                  <SlidersHorizontal className="w-3 h-3" />
+                  <span>Lọc chi tiết (Lương, ca làm)...</span>
+                </button>
+
+                {sidebarTab === 'list' && (
+                  <button
+                    onClick={() => setSidebarTab('chart')}
+                    className="flex items-center gap-1 text-[10.5px] font-extrabold text-amber-600 hover:text-amber-700 cursor-pointer bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200/50"
+                  >
+                    <BarChart3 className="w-3 h-3" />
+                    <span>Biểu đồ lương →</span>
+                  </button>
+                )}
+              </div>
+
+              {showFilters && (
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100 animate-in slide-in-from-top-2 duration-150">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Cách trả lương</label>
+                    <select
+                      value={salaryTypeFilter}
+                      onChange={(e) => setSalaryTypeFilter(e.target.value)}
+                      className="w-full p-2 rounded-lg border border-slate-200 bg-slate-50/50 text-[11px] font-bold text-slate-700 outline-none cursor-pointer"
+                    >
+                      <option value="All">Mọi hình thức</option>
+                      <option value="Hourly">Theo giờ (시급)</option>
+                      <option value="Monthly">Theo tháng (월급)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Lương tối thiểu (KRW)</label>
+                    <input
+                      type="number"
+                      value={minSalaryFilter}
+                      onChange={(e) => setMinSalaryFilter(e.target.value)}
+                      placeholder="Ví dụ: 10000"
+                      className="w-full p-2 rounded-lg border border-slate-200 bg-slate-50/50 text-[11px] font-bold text-slate-700 outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Quick suggestion tags inside sidebar */}
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400 pt-0.5">
+                <span className="font-semibold">Tìm nhanh:</span>
+                <button
+                  onClick={() => handleQuickSearch('식당', 'Daejeon')}
+                  className="text-[10px] font-bold text-slate-600 bg-slate-50 border border-slate-200/60 px-2 py-0.5 rounded-full hover:bg-slate-100 hover:border-slate-300 cursor-pointer"
+                >
+                  Daejeon 식당
+                </button>
+                <button
+                  onClick={() => handleQuickSearch('카페', 'Seoul')}
+                  className="text-[10px] font-bold text-slate-600 bg-slate-50 border border-slate-200/60 px-2 py-0.5 rounded-full hover:bg-slate-100 hover:border-slate-300 cursor-pointer"
+                >
+                  Seoul Cafe
+                </button>
+                <button
+                  onClick={() => handleQuickSearch('공장')}
+                  className="text-[10px] font-bold text-slate-600 bg-slate-50 border border-slate-200/60 px-2 py-0.5 rounded-full hover:bg-slate-100 hover:border-slate-300 cursor-pointer"
+                >
+                  Công xưởng
+                </button>
+              </div>
+
+              {/* Recent Searches section (last 5 filter combinations stored in localStorage) */}
+              {recentSearches.length > 0 && (
+                <div className="pt-2 border-t border-slate-100/80">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1 text-[10.5px] font-bold text-slate-500">
+                      <History className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Tìm kiếm gần đây (Tối đa 5):</span>
+                    </div>
+                    <button
+                      onClick={handleClearRecentSearches}
+                      className="text-[10px] font-extrabold text-slate-400 hover:text-red-500 transition-colors cursor-pointer"
+                      title="Xóa toàn bộ lịch sử tìm kiếm"
+                    >
+                      Xóa hết
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {recentSearches.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => handleSelectRecentSearch(item)}
+                        className="group inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-50/70 hover:bg-blue-100 border border-blue-200/60 text-blue-700 text-[10.5px] font-bold cursor-pointer transition-all shadow-2xs hover:shadow-xs"
+                        title="Nhấn để chọn lại bộ lọc này"
+                      >
+                        <span className="max-w-[160px] truncate">{item.label}</span>
+                        <button
+                          onClick={(e) => handleRemoveRecentSearch(item.id, e)}
+                          className="text-blue-400 hover:text-red-500 transition-colors p-0.5 rounded-full hover:bg-white/80"
+                          title="Xóa bộ lọc này"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Sidebar Main Content (Results List OR Recharts Salary Chart) */}
+            <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-slate-50/50">
+              {sidebarTab === 'chart' ? (
+                <SalaryChart 
+                  jobs={jobs}
+                  onSelectCategory={(cat) => {
+                    setCategoryFilter(cat);
+                    setSidebarTab('list');
+                  }}
+                  onSelectCity={(city) => {
+                    setCityFilter(city);
+                    setSidebarTab('list');
+                  }}
+                  currentCityFilter={cityFilter}
+                  currentCategoryFilter={categoryFilter}
+                />
+              ) : (
+                <>
+                  {/* Banner trigger to Chart */}
+                  <div 
+                    onClick={() => setSidebarTab('chart')}
+                    className="p-3 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white rounded-2xl shadow-md flex items-center justify-between cursor-pointer transition-all group"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 bg-white/20 backdrop-blur-xs rounded-xl group-hover:scale-105 transition-transform">
+                        <BarChart3 className="w-4 h-4 text-amber-300" />
+                      </div>
+                      <div>
+                        <span className="text-[11.5px] font-black block leading-tight">
+                          Phân bổ & So sánh Mức lương 📊
+                        </span>
+                        <span className="text-[10px] text-blue-100 font-medium">
+                          Xem thu nhập trung bình theo ngành & khu vực
+                        </span>
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-blue-200 group-hover:translate-x-1 transition-transform" />
+                  </div>
+
+                  {loading ? (
+                    <div className="flex flex-col items-center justify-center py-24 gap-2">
+                      <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                      <span className="text-xs text-slate-400 font-bold">Đang tải dữ liệu...</span>
+                    </div>
+                  ) : displayedJobs.length === 0 ? (
+                    <div className="bg-white rounded-2xl p-8 text-center border border-slate-200/80 shadow-sm space-y-2">
+                      <p className="text-xs font-bold text-slate-700">Không tìm thấy bài tuyển dụng phù hợp.</p>
+                      <p className="text-[11px] text-slate-400">Hãy thử xóa bộ lọc, tìm nhanh, hoặc di chuyển vùng bản đồ.</p>
+                      <button 
+                        onClick={handleResetFilters}
+                        className="text-xs font-bold text-blue-600 underline cursor-pointer mt-1"
+                      >
+                        Xóa tất cả bộ lọc
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 pb-8">
+                      {displayedJobs.map(job => (
+                        <JobCard 
+                          key={job.id}
+                          job={job}
+                          isBookmarked={bookmarkedIds.includes(job.id)}
+                          onToggleBookmark={handleToggleBookmark}
+                          onSelect={(j) => setSelectedJob(j)}
+                          isSelected={selectedJob?.id === job.id}
+                          userLocation={userLocation}
+                          onLocateUser={handleLocateUser}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Sidebar mini footer links */}
+            <div className="p-3 border-t border-slate-100 text-[10px] text-slate-400 text-center bg-white">
+              <span>86Job © 2026 • </span>
+              <button onClick={() => setContactOpen(true)} className="hover:text-blue-600 underline cursor-pointer">Liên hệ Hỗ trợ</button>
+              <span> • </span>
+              <button onClick={() => setActiveTab('parse')} className="hover:text-blue-600 underline cursor-pointer">Đăng tin bằng AI</button>
+            </div>
+          </aside>
+
+          {/* RIGHT SIDE MAP VIEW (Immersive Map occupying remaining space) */}
+          <main 
+            style={
+              typeof window !== 'undefined' && window.innerWidth < 1024 
+                ? (mobileLayoutMode === 'cards' 
+                    ? { height: '100%', flex: '1' } 
+                    : mobileLayoutMode === 'split' 
+                      ? { height: `${100 - mobileHeightPercent}vh`, flex: 'none' } 
+                      : { display: 'none' }) 
+                : undefined
+            }
+            className={`transition-all relative lg:h-full lg:flex-1 w-full shrink-0 border-b border-slate-200/80 lg:border-b-0 ${
+              mobileLayoutMode === 'list' ? 'hidden lg:block' : 'block'
+            }`}
+          >
+            <MapContainer 
+              jobs={displayedJobs}
+              selectedJob={selectedJob}
+              onSelectJob={(j) => setSelectedJob(j)}
+              userLocation={userLocation}
+              onLocateUser={handleLocateUser}
+              isLocatingUser={isLocating}
+            />
+
+            {/* MODERN FLOATING FILTER & SEARCH PANEL (Airbnb / Google Maps Inspired) */}
+            <div className="absolute top-4 left-4 right-4 z-[900] space-y-2.5 pointer-events-none flex flex-col">
+              
+              {/* Top Row: Search Input & Live status badge */}
+              <div className="flex flex-col sm:flex-row gap-2 w-full pointer-events-auto">
+                
+                {/* Search Bar */}
+                <div className="flex-1 bg-white/95 backdrop-blur-md border border-slate-200/85 rounded-full py-2.5 px-4 shadow-xl flex items-center gap-2 transition-all focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
+                  <Search className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                  <input 
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Tìm việc làm, khu vực, tên xưởng..."
+                    className="bg-transparent outline-none text-xs font-bold w-full text-slate-800"
+                  />
+                  {searchQuery && (
+                    <button 
+                      onClick={() => setSearchQuery('')} 
+                      className="text-slate-400 text-xs font-bold p-1 hover:text-slate-600 cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* thongtincuuho style Live Status Tracker */}
+                <div className="bg-slate-900/90 backdrop-blur-md text-white border border-slate-800 rounded-full py-2 px-4 shadow-xl flex items-center gap-2.5 flex-shrink-0 self-start sm:self-auto">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                  </span>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400">
+                    LIVE • {displayedJobs.length} Tin tuyển
+                  </span>
+                </div>
+              </div>
+
+              {/* Horizontally Scrollable Filter Chips (Airbnb style) */}
+              <div className="w-full overflow-x-auto flex gap-1.5 py-1 pointer-events-auto no-scrollbar scroll-smooth">
+                {[
+                  { id: 'All', label: 'Tất cả ngành', emoji: '🌐' },
+                  { id: 'Restaurant', label: 'Nhà hàng', emoji: '🍲' },
+                  { id: 'Cafe', label: 'Cà phê', emoji: '☕' },
+                  { id: 'Factory', label: 'Nhà xưởng', emoji: '🏭' },
+                  { id: 'Warehouse', label: 'Kho bãi', emoji: '📦' },
+                  { id: 'Convenience Store', label: 'Cửa hàng', emoji: '🏪' },
+                  { id: 'Office', label: 'Văn phòng', emoji: '🏢' }
+                ].map(cat => (
+                  <button
+                    key={cat.id}
+                    onClick={() => setCategoryFilter(cat.id)}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-extrabold rounded-full border transition-all cursor-pointer whitespace-nowrap shadow-md ${
+                      categoryFilter === cat.id
+                        ? 'bg-blue-600 border-blue-700 text-white shadow-blue-500/20 scale-105'
+                        : 'bg-white/95 backdrop-blur-md border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>{cat.emoji}</span>
+                    <span>{cat.label}</span>
+                  </button>
+                ))}
+
+                <div className="w-[1.5px] bg-slate-300/60 self-stretch my-1 mx-1 flex-shrink-0" />
+
+                {[
+                  { id: 'All', label: 'Tất cả TP', emoji: '📍' },
+                  { id: 'Seoul', label: 'Seoul', emoji: '🗼' },
+                  { id: 'Gyeonggi', label: 'Gyeonggi', emoji: '🏡' },
+                  { id: 'Incheon', label: 'Incheon', emoji: '✈️' },
+                  { id: 'Daejeon', label: 'Daejeon', emoji: '🚄' },
+                  { id: 'Busan', label: 'Busan', emoji: '🌊' }
+                ].map(city => (
+                  <button
+                    key={city.id}
+                    onClick={() => setCityFilter(city.id)}
+                    className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-extrabold rounded-full border transition-all cursor-pointer whitespace-nowrap shadow-md ${
+                      cityFilter === city.id
+                        ? 'bg-emerald-600 border-emerald-700 text-white shadow-emerald-500/20 scale-105'
+                        : 'bg-white/95 backdrop-blur-md border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>{city.emoji}</span>
+                    <span>{city.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* FLOATING ACTION BUTTONS STACK (Grab Driver & Google Maps Inspired FABs) */}
+            <div className="absolute right-4 top-36 sm:top-28 z-[900] flex flex-col gap-2.5 pointer-events-auto">
+              
+              {/* Locate GPS / Center button */}
+              <button
+                onClick={handleLocateUser}
+                className={`w-11 h-11 bg-white/95 backdrop-blur-md hover:bg-slate-50 border border-slate-200 shadow-xl rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer group ${
+                  isLocating ? 'text-emerald-600 animate-pulse' : userLocation ? 'text-emerald-600' : 'text-slate-700'
+                }`}
+                title="Định vị GPS vị trí của tôi"
+              >
+                <MapPin className={`w-5 h-5 ${isLocating ? 'animate-bounce text-emerald-600' : userLocation ? 'text-emerald-600' : 'text-blue-600 group-hover:animate-bounce'}`} />
+              </button>
+
+              {/* Bookmark Toggle filter */}
+              <button
+                onClick={() => setShowSavedOnly(!showSavedOnly)}
+                className={`w-11 h-11 border shadow-xl rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
+                  showSavedOnly 
+                    ? 'bg-amber-500 border-amber-600 text-white shadow-amber-500/20' 
+                    : 'bg-white/95 backdrop-blur-md border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+                title="Chỉ hiển thị công việc đã lưu"
+              >
+                <Heart className="w-5 h-5" fill={showSavedOnly ? '#ffffff' : 'none'} />
+              </button>
+
+              {/* Fast Emergency Post Button */}
+              <button
+                onClick={() => setActiveTab('parse')}
+                className="w-11 h-11 bg-rose-600 hover:bg-rose-700 border border-rose-700 text-white shadow-xl rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer animate-pulse"
+                title="Đăng tin khẩn cấp / Cứu trợ bằng AI"
+              >
+                <Sparkles className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* HORIZONTAL SWIPE CARDS OVERLAY FOR MOBILE 'CARDS' LAYOUT */}
+            {mobileLayoutMode === 'cards' && !isDrawerMinimized && (
+              <div className="lg:hidden absolute bottom-5 left-0 right-0 z-[900] px-4 pointer-events-none flex flex-col gap-2">
+                {hideSwipeCards ? (
+                  /* Floating pill to show the card overlay again if hidden */
+                  <div className="flex justify-center pointer-events-auto">
+                    <button
+                      onClick={() => setHideSwipeCards(false)}
+                      className="bg-slate-900/95 text-white text-[11px] font-extrabold px-4 py-2 rounded-full shadow-2xl border border-slate-800 flex items-center gap-2 cursor-pointer hover:bg-slate-800 transition-all active:scale-95 animate-bounce"
+                    >
+                      <span>📋 Hiện danh sách tin</span>
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {/* Header bar to close/dismiss the deck */}
+                    <div className="flex justify-between items-center px-1 pointer-events-auto">
+                      <div className="bg-slate-900/90 text-white text-[9px] font-extrabold tracking-wider uppercase px-2.5 py-1 rounded-full border border-slate-800">
+                        Vuốt ngang để xem • {displayedJobs.length} tin
+                      </div>
+                      <button 
+                        onClick={() => setHideSwipeCards(true)}
+                        className="w-7 h-7 bg-slate-900/95 hover:bg-slate-800 border border-slate-800 text-white font-black text-xs rounded-full flex items-center justify-center shadow-lg cursor-pointer transition-all active:scale-90"
+                        title="Ẩn danh sách thẻ"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <div 
+                      ref={swipeContainerRef}
+                      onScroll={handleSwipeScroll}
+                      className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-3 pointer-events-auto no-scrollbar scroll-smooth"
+                    >
+                      {displayedJobs.map(job => (
+                        <div 
+                          key={job.id} 
+                          id={`job-card-${job.id}`}
+                          className="w-[280px] sm:w-[310px] flex-shrink-0 snap-center"
+                        >
+                          <JobCard 
+                            job={job}
+                            isBookmarked={bookmarkedIds.includes(job.id)}
+                            onToggleBookmark={handleToggleBookmark}
+                            onSelect={(j) => setSelectedJob(j)}
+                            isSelected={selectedJob?.id === job.id}
+                            userLocation={userLocation}
+                            onLocateUser={handleLocateUser}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </main>
+
+        </div>
+      ) : (
+        // Standard max-width container for content tabs (parse, bookmarks, admin)
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          
+          {/* ========================================== */}
+          {/* TAB 4: AI PARSING TOOL & MANUAL POSTING */}
+          {/* ========================================== */}
+          {activeTab === 'parse' && (
+            <AIParsingTool 
+              currentUser={currentUser}
+              onJobCreated={handleNewJobCreated}
+              setActiveTab={setActiveTab}
+              onOpenAuthModal={(tab, prompt) => openAuthModal(tab || 'login', prompt)}
+            />
+          )}
+
+          {/* ========================================== */}
+          {/* TAB 5: SAVED BOOKMARKS */}
+          {/* ========================================== */}
+          {activeTab === 'bookmarks' && (
+            <div className="space-y-6 animate-in fade-in duration-200">
+              <div>
+                <h1 className="font-display text-2xl font-extrabold text-slate-950">Việc làm đã lưu của bạn ({bookmarkedIds.length})</h1>
+                <p className="text-xs text-slate-400 mt-1">Lưu trữ các công việc lương cao, hỗ trợ visa tốt để ứng tuyển sau</p>
+              </div>
+
+              {!currentUser ? (
+                <div className="bg-white rounded-3xl p-12 text-center border border-slate-200/80 shadow-md space-y-4 max-w-md mx-auto my-6">
+                  <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto border border-blue-100/80 shadow-xs">
+                    <Heart className="w-7 h-7 text-blue-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-extrabold text-slate-800">Bạn chưa đăng nhập</h3>
+                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                      Đăng nhập hoặc tạo tài khoản để lưu trữ các việc làm thêm tốt nhất, xem lại trên mọi thiết bị.
+                    </p>
+                  </div>
+                  <div className="flex justify-center gap-2.5 pt-2">
+                    <button
+                      onClick={() => openAuthModal('login', '🔒 Đăng nhập để xem công việc đã lưu')}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 px-5 rounded-full shadow-md cursor-pointer transition-all"
+                    >
+                      Đăng nhập
+                    </button>
+                    <button
+                      onClick={() => openAuthModal('register')}
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2.5 px-5 rounded-full border border-slate-200 cursor-pointer transition-all"
+                    >
+                      Đăng ký ngay
+                    </button>
+                  </div>
+                </div>
+              ) : bookmarkedIds.length === 0 ? (
+                <div className="bg-white rounded-2xl p-12 text-center border border-slate-200/80 shadow-md space-y-2">
+                  <p className="text-sm font-bold text-slate-700">Danh sách yêu thích trống.</p>
+                  <p className="text-xs text-slate-400">Hãy nhấn biểu tượng trái tim ở các thẻ công việc để lưu trữ lại đây.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {jobs.filter(job => bookmarkedIds.includes(job.id)).map(job => (
+                    <JobCard 
+                      key={job.id}
+                      job={job}
+                      isBookmarked={true}
+                      onToggleBookmark={handleToggleBookmark}
+                      onSelect={(j) => setSelectedJob(j)}
+                      userLocation={userLocation}
+                      onLocateUser={handleLocateUser}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ========================================== */}
+          {/* TAB 6: ADMIN CONTROL PANEL (ADMINS ONLY) */}
+          {/* ========================================== */}
+          {activeTab === 'admin' && currentUser?.role === 'admin' && (
+            <AdminPanel 
+              jobs={adminJobsList}
+              onStatusUpdate={handleStatusUpdate}
+              onDeleteJob={handleDeleteJob}
+              onSimulateCrawl={handleSimulateCrawl}
+            />
+          )}
+
+        </main>
+      )}
+
+      {/* FOOTER */}
+      {activeTab !== 'jobs' && (
+        <footer className="bg-white border-t border-slate-200/80 mt-24 py-8">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center sm:text-left flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div>
+              <p className="text-sm font-extrabold text-blue-600 font-display">86Job</p>
+              <p className="text-xs text-slate-400 mt-1">© 2026 86Job. Nền tảng tổng hợp việc làm uy tín cho cộng đồng Việt Nam tại Hàn Quốc.</p>
+            </div>
+            <div className="flex gap-4 text-xs font-semibold text-slate-400">
+              <span className="hover:text-blue-600 cursor-pointer" onClick={() => setContactOpen(true)}>Hỗ trợ kĩ thuật</span>
+              <span>•</span>
+              <span className="hover:text-blue-600 cursor-pointer" onClick={() => setActiveTab('parse')}>Đăng tin bằng AI</span>
+              <span>•</span>
+              <span className="hover:text-blue-600 cursor-pointer" onClick={() => {
+                // Quick login as Admin
+                handleLogin('lechidaicma@gmail.com', 'Admin 86Job', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150', 'admin');
+                setActiveTab('admin');
+              }}>Quản trị</span>
+            </div>
+          </div>
+        </footer>
+      )}
+
+      {/* AUTHENTICATION MODAL */}
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        initialTab={authModalTab}
+        onLoginSuccess={handleLogin}
+        promptMessage={authPromptMessage}
+      />
+
+      {/* JOB DETAIL DRAWER WITH DISTANCE & DIRECTIONS */}
+      {selectedJob && (
+        <JobDetailDrawer
+          job={selectedJob}
+          onClose={() => {
+            setSelectedJob(null);
+            setIsDrawerMinimized(false);
+          }}
+          isBookmarked={bookmarkedIds.includes(selectedJob.id)}
+          onToggleBookmark={handleToggleBookmark}
+          currentUser={currentUser}
+          userLocation={userLocation}
+          onLocateUser={handleLocateUser}
+          isLocatingUser={isLocating}
+          onMinimizeChange={(minimized) => {
+            setIsDrawerMinimized(minimized);
+            if (minimized) {
+              setHideSwipeCards(true);
+            }
+          }}
+        />
+      )}
+
+    </div>
+  );
+}
