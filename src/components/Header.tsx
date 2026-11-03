@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { Briefcase, Map, Heart, Send, MessageSquare, Shield, LogIn, LogOut, Menu, X, User, BarChart3 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { LogOut, Menu, X, Plus } from 'lucide-react';
 import { User as UserType } from '../types';
 import Logo from './Logo';
 
 interface HeaderProps {
   currentUser: UserType | null;
-  onLogin: (email: string, name: string, avatar: string, role: 'user' | 'admin') => void;
+  onLogin: () => void;
   onLogout: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
@@ -18,264 +18,172 @@ interface HeaderProps {
   onOpenAuthModal?: (tab?: 'login' | 'register') => void;
 }
 
-export default function Header({ 
-  currentUser, 
-  onLogin, 
-  onLogout, 
-  activeTab, 
+/** A plain bar: the 86Job mark, the destinations, one action. On a phone the destinations fold into a full-screen menu. */
+export default function Header({
+  currentUser,
+  onLogout,
+  activeTab,
   setActiveTab,
   onOpenContact,
   onOpenAuthModal
 }: HeaderProps) {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenuOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuOpen]);
 
   const menuItems = [
-    { id: 'jobs', label: 'Bản đồ việc làm', icon: Map },
-    { id: 'chart', label: 'Biểu đồ lương 📊', icon: BarChart3 },
-    { id: 'parse', label: 'Phân tích AI ✨', icon: Send },
-    { id: 'bookmarks', label: 'Yêu thích', icon: Heart },
+    { id: 'jobs', label: 'Bản đồ việc làm' },
+    { id: 'bookmarks', label: 'Đã lưu' },
+    { id: 'parse', label: 'Đăng tin' },
+    ...(currentUser?.role === 'admin' ? [{ id: 'admin', label: 'Quản trị' }] : [])
   ];
 
+  const go = (id: string) => {
+    setActiveTab(id);
+    setMenuOpen(false);
+  };
+
   return (
-    <header className="sticky top-0 z-[1000] w-full bg-white/80 border-b border-slate-200/80 backdrop-blur-md shadow-sm transition-all">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
-          {/* Logo */}
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => setActiveTab('jobs')}>
-            <div className="flex flex-col">
-              <Logo className="h-9 w-auto" />
-              <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase block -mt-1 pl-1">
-                Việc làm thêm Hàn Quốc
-              </span>
+    <header className="sticky top-0 z-[1000] w-full bg-surface border-b border-line">
+      <div className="h-12 lg:h-14 px-4 lg:px-6 flex items-center justify-between gap-4">
+        <button type="button" onClick={() => go('jobs')} className="flex items-center gap-2 cursor-pointer" aria-label="86Job, về bản đồ việc làm">
+          <Logo className="h-7 lg:h-8 w-auto" />
+        </button>
+
+        {/* Desktop destinations */}
+        <nav className="hidden lg:flex items-center gap-1 flex-1" aria-label="Chính">
+          {menuItems.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => go(item.id)}
+              aria-current={activeTab === item.id ? 'page' : undefined}
+              className={`h-10 px-4 rounded-full text-sm font-semibold cursor-pointer transition-colors ${
+                activeTab === item.id ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+          <button type="button" onClick={onOpenContact} className="h-10 px-4 rounded-full text-sm font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 cursor-pointer">
+            Liên hệ
+          </button>
+        </nav>
+
+        <div className="flex items-center gap-2">
+          {currentUser ? (
+            <div className="hidden lg:flex items-center gap-3">
+              <span className="text-sm text-ink">{currentUser.name}</span>
+              <img src={currentUser.avatar} alt="" className="w-8 h-8 rounded-full bg-raised" />
+              <button
+                type="button"
+                onClick={onLogout}
+                aria-label="Đăng xuất"
+                className="w-9 h-9 flex items-center justify-center rounded-md text-muted hover:text-ink hover:bg-raised cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" strokeWidth={1.75} />
+              </button>
             </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onOpenAuthModal?.('login')}
+              className="hidden lg:inline-flex h-10 px-5 items-center rounded-full bg-blue-600 text-white text-sm font-bold shadow-md hover:bg-blue-700 hover:shadow-lg transition-all cursor-pointer"
+            >
+              Đăng nhập
+            </button>
+          )}
+
+          {/* Phone: the one action and the menu */}
+          <button
+            type="button"
+            onClick={() => go('parse')}
+            className="lg:hidden h-9 px-3.5 inline-flex items-center gap-1 rounded-full bg-blue-600 text-white text-sm font-bold shadow-md hover:bg-blue-700 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" strokeWidth={2} />
+            Đăng tin
+          </button>
+          <button
+            type="button"
+            onClick={() => setMenuOpen(true)}
+            aria-label="Mở menu"
+            aria-expanded={menuOpen}
+            className="lg:hidden w-10 h-10 -mr-2 flex items-center justify-center rounded-md text-ink hover:bg-raised cursor-pointer"
+          >
+            <Menu className="w-5 h-5" strokeWidth={1.75} />
+          </button>
+        </div>
+      </div>
+
+      {/* Phone menu: a full-screen sheet */}
+      {menuOpen && (
+        <div className="lg:hidden fixed inset-0 z-[3000] bg-surface flex flex-col" role="dialog" aria-modal="true" aria-label="Menu">
+          <div className="h-12 px-4 flex items-center justify-between border-b border-line">
+            <Logo className="h-7 w-auto" />
+            <button
+              type="button"
+              onClick={() => setMenuOpen(false)}
+              aria-label="Đóng menu"
+              className="w-10 h-10 -mr-2 flex items-center justify-center rounded-md text-ink hover:bg-raised cursor-pointer"
+            >
+              <X className="w-5 h-5" strokeWidth={1.75} />
+            </button>
           </div>
 
-          {/* Desktop Navigation */}
-          <nav className="hidden md:flex space-x-1">
-            {menuItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  id={`nav-${item.id}`}
-                  onClick={() => {
-                    setActiveTab(item.id);
-                    setMobileMenuOpen(false);
-                  }}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition-all cursor-pointer ${
-                    isActive 
-                      ? 'bg-blue-50 text-blue-600' 
-                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {item.label}
-                </button>
-              );
-            })}
-
-            {/* Admin panel only visible to Admin */}
-            {currentUser?.role === 'admin' && (
+          <nav className="flex-1 overflow-y-auto px-2 py-3" aria-label="Chính">
+            {menuItems.map(item => (
               <button
-                id="nav-admin"
-                onClick={() => setActiveTab('admin')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition-all cursor-pointer ${
-                  activeTab === 'admin'
-                    ? 'bg-purple-50 text-purple-700'
-                    : 'text-purple-600 hover:bg-purple-50/50'
+                key={item.id}
+                type="button"
+                onClick={() => go(item.id)}
+                aria-current={activeTab === item.id ? 'page' : undefined}
+                className={`w-full h-12 px-4 rounded-xl text-left text-base font-semibold cursor-pointer ${
+                  activeTab === item.id ? 'bg-blue-50 text-blue-600' : 'text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                <Shield className="w-4 h-4" />
-                Admin Panel
+                {item.label}
               </button>
-            )}
-
+            ))}
             <button
-              onClick={onOpenContact}
-              className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 cursor-pointer"
+              type="button"
+              onClick={() => { onOpenContact(); setMenuOpen(false); }}
+              className="w-full h-12 px-4 rounded-xl text-left text-base font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
             >
-              <MessageSquare className="w-4 h-4" />
               Liên hệ
             </button>
           </nav>
 
-          {/* User Section (Desktop) */}
-          <div className="hidden md:flex items-center gap-4">
+          <div className="border-t border-line px-4 py-4">
             {currentUser ? (
-              <div className="flex items-center gap-3">
-                <div className="text-right">
-                  <div className="text-sm font-bold text-slate-900 leading-tight">
-                    {currentUser.name}
-                  </div>
-                  <div className="flex items-center justify-end gap-1 mt-0.5">
-                    {currentUser.role === 'admin' ? (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-700">
-                        Admin
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-100 text-blue-700">
-                        Học sinh
-                      </span>
-                    )}
-                    <span className="text-[11px] text-slate-400">
-                      {currentUser.email.split('@')[0]}
-                    </span>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <img src={currentUser.avatar} alt="" className="w-9 h-9 rounded-full bg-raised" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-ink truncate">{currentUser.name}</p>
+                    <p className="text-xs text-muted truncate">{currentUser.email}</p>
                   </div>
                 </div>
-                <div className="relative group">
-                  <img 
-                    src={currentUser.avatar} 
-                    alt={currentUser.name} 
-                    className="w-10 h-10 rounded-full border-2 border-slate-100 shadow-sm cursor-pointer"
-                  />
-                  <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-200/80 py-1 hidden group-hover:block hover:block z-[2000]">
-                    <button 
-                      onClick={onLogout}
-                      className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 font-medium text-left cursor-pointer"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      Đăng xuất
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
                 <button
-                  id="btn-login-trigger"
-                  onClick={() => onOpenAuthModal?.('login')}
-                  className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-4 py-2.5 rounded-full shadow-md hover:shadow-lg transition-all cursor-pointer"
+                  type="button"
+                  onClick={() => { onLogout(); setMenuOpen(false); }}
+                  className="h-10 px-3 rounded-md border border-control text-sm text-ink cursor-pointer"
                 >
-                  <LogIn className="w-3.5 h-3.5" />
-                  <span>Đăng nhập</span>
-                </button>
-                
-                <button
-                  onClick={() => onOpenAuthModal?.('register')}
-                  className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs px-4 py-2.5 rounded-full border border-slate-200 transition-all cursor-pointer"
-                >
-                  <User className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Đăng ký</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Mobile Menu Button */}
-          <div className="md:hidden flex items-center gap-2">
-            {currentUser && (
-              <img 
-                src={currentUser.avatar} 
-                alt={currentUser.name} 
-                className="w-8 h-8 rounded-full border border-gray-100"
-              />
-            )}
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 rounded-xl text-gray-500 hover:bg-gray-50 hover:text-gray-900 cursor-pointer"
-            >
-              {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Mobile Navigation Panel */}
-      {mobileMenuOpen && (
-        <div className="md:hidden border-t border-gray-100 bg-white/95 backdrop-blur-md px-4 pt-2 pb-6 space-y-1 shadow-lg animate-in fade-in duration-200">
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setActiveTab(item.id);
-                  setMobileMenuOpen(false);
-                }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-base font-semibold transition-all cursor-pointer ${
-                  isActive 
-                    ? 'bg-blue-50 text-blue-600' 
-                    : 'text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                <Icon className="w-5 h-5" />
-                {item.label}
-              </button>
-            );
-          })}
-
-          {currentUser?.role === 'admin' && (
-            <button
-              onClick={() => {
-                setActiveTab('admin');
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-base font-semibold transition-all cursor-pointer ${
-                activeTab === 'admin'
-                  ? 'bg-purple-50 text-purple-600'
-                  : 'text-purple-600 hover:bg-purple-50'
-              }`}
-            >
-              <Shield className="w-5 h-5" />
-              Admin Panel
-            </button>
-          )}
-
-          <button
-            onClick={() => {
-              onOpenContact();
-              setMobileMenuOpen(false);
-            }}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-base font-semibold text-gray-600 hover:bg-gray-50 cursor-pointer"
-          >
-            <MessageSquare className="w-5 h-5" />
-            Liên hệ
-          </button>
-
-          <div className="pt-4 border-t border-gray-100 mt-4">
-            {currentUser ? (
-              <div className="space-y-3">
-                <div className="px-4">
-                  <p className="font-bold text-gray-900">{currentUser.name}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{currentUser.email}</p>
-                </div>
-                <button
-                  onClick={() => {
-                    onLogout();
-                    setMobileMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 font-bold text-base rounded-xl cursor-pointer"
-                >
-                  <LogOut className="w-5 h-5" />
                   Đăng xuất
                 </button>
               </div>
             ) : (
-              <div className="space-y-2">
-                <p className="text-xs font-bold text-gray-400 px-4 uppercase tracking-wider mb-2">Tài khoản</p>
-                <div className="grid grid-cols-2 gap-2 px-2">
-                  <button
-                    onClick={() => {
-                      if (onOpenAuthModal) onOpenAuthModal('login');
-                      setMobileMenuOpen(false);
-                    }}
-                    className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-blue-200 text-blue-600 bg-blue-50 text-xs font-bold cursor-pointer"
-                  >
-                    Đăng nhập
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (onOpenAuthModal) onOpenAuthModal('register');
-                      setMobileMenuOpen(false);
-                    }}
-                    className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-slate-200 text-slate-700 bg-slate-100 text-xs font-bold cursor-pointer"
-                  >
-                    Đăng ký
-                  </button>
-                </div>
-              </div>
+              <button
+                type="button"
+                onClick={() => { onOpenAuthModal?.('login'); setMenuOpen(false); }}
+                className="w-full h-12 rounded-full bg-blue-600 text-white text-sm font-bold shadow-md cursor-pointer"
+              >
+                Đăng nhập bằng Google
+              </button>
             )}
           </div>
         </div>

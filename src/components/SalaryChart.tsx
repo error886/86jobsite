@@ -18,6 +18,7 @@ import {
   Pie,
   Legend
 } from 'recharts';
+import { MIN_HOURLY_WAGE, MIN_WAGE_YEAR, formatKRW } from '../utils/wage';
 import { 
   TrendingUp, 
   MapPin, 
@@ -70,8 +71,9 @@ const CITY_COLORS: Record<string, string> = {
   Daegu: '#DB2777'      // Pink
 };
 
-// Standard Minimum Hourly Wage in S. Korea (2025/2026 reference)
-const KOREA_MIN_HOURLY_WAGE = 10030;
+// Legal minimum hourly wage in S. Korea, shared with the rest of the app
+const KOREA_MIN_HOURLY_WAGE = MIN_HOURLY_WAGE;
+const MIN_WAGE_LABEL = `${formatKRW(KOREA_MIN_HOURLY_WAGE)}₩`;
 // Approx Exchange Rate: 1 KRW ~ 18.8 VND
 const KRW_TO_VND_RATE = 18.8;
 
@@ -250,11 +252,11 @@ export default function SalaryChart({
               <p className="text-[9.5px] text-slate-400 pt-1 border-t border-slate-800">
                 {data.avgSalary >= KOREA_MIN_HOURLY_WAGE ? (
                   <span className="text-emerald-400 font-semibold">
-                    ▲ +{(((data.avgSalary - KOREA_MIN_HOURLY_WAGE) / KOREA_MIN_HOURLY_WAGE) * 100).toFixed(1)}% so với lương tối thiểu (10.030₩)
+                    ▲ +{(((data.avgSalary - KOREA_MIN_HOURLY_WAGE) / KOREA_MIN_HOURLY_WAGE) * 100).toFixed(1)}% so với lương tối thiểu ({MIN_WAGE_LABEL})
                   </span>
                 ) : (
                   <span className="text-rose-400 font-semibold">
-                    ▼ Dưới lương tối thiểu Hàn Quốc (10.030₩)
+                    ▼ Dưới lương tối thiểu Hàn Quốc ({MIN_WAGE_LABEL})
                   </span>
                 )}
               </p>
@@ -455,7 +457,7 @@ export default function SalaryChart({
                           stroke="#EF4444"
                           strokeDasharray="4 4"
                           label={{
-                            value: 'Tối thiểu 10.030₩',
+                            value: `Tối thiểu ${MIN_WAGE_LABEL}`,
                             fill: '#EF4444',
                             fontSize: 9,
                             fontWeight: 800,
@@ -486,7 +488,7 @@ export default function SalaryChart({
                 <div className="flex items-center justify-between text-[9.5px] text-slate-400 font-medium px-1">
                   <span className="flex items-center gap-1 text-rose-500 font-semibold">
                     <span className="w-2 h-0.5 bg-rose-500 border border-rose-500 inline-block" />
-                    Vạch đỏ: Lương tối thiểu (10.030₩/h)
+                    Vạch đỏ: Lương tối thiểu ({MIN_WAGE_LABEL}/h)
                   </span>
                   <span>Nhấp vào cột để lọc việc</span>
                 </div>
@@ -520,7 +522,7 @@ export default function SalaryChart({
                           stroke="#EF4444"
                           strokeDasharray="4 4"
                           label={{
-                            value: '10.030₩',
+                            value: MIN_WAGE_LABEL,
                             fill: '#EF4444',
                             fontSize: 9,
                             fontWeight: 800,
@@ -612,7 +614,7 @@ export default function SalaryChart({
       <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200/60 text-[10.5px] text-amber-900 leading-relaxed flex items-start gap-2">
         <Info className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
         <div>
-          <span className="font-extrabold">Lưu ý du học sinh:</span> Mức lương tối thiểu quy định năm 2026 tại Hàn Quốc là <span className="font-bold underline">10.030 KRW/giờ</span>. Làm đêm (22:00 ~ 06:00) hoặc tăng ca theo luật được tính x1.5 lương cơ bản.
+          <span className="font-extrabold">Lưu ý du học sinh:</span> Mức lương tối thiểu quy định năm {MIN_WAGE_YEAR} tại Hàn Quốc là <span className="font-bold underline">{formatKRW(KOREA_MIN_HOURLY_WAGE)} KRW/giờ</span>. Làm đêm (22:00 ~ 06:00) hoặc tăng ca theo luật được tính x1.5 lương cơ bản.
         </div>
       </div>
     </div>

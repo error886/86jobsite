@@ -1,0 +1,1 @@
+Source: https://github.com/emilkowalski/skills @ f1090be (skills/find-animation-opportunities/)

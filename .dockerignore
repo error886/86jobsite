@@ -6,6 +6,16 @@ build
 coverage
 *.log
 .env
-.env.local
+.env.*
+!.env.example
 .vscode
 .idea
+db.json
+.claude
+.agents
+.specify
+.impeccable
+.taste-skill
+docs
+assets
+img

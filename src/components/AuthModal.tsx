@@ -3,16 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
-import { X, LogIn, UserPlus, Mail, Lock, User, Shield, Sparkles, CheckCircle2, ArrowRight } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, LogIn, UserPlus, Sparkles } from 'lucide-react';
 import Logo from './Logo';
-import { loginWithGoogle, loginWithEmailDatabase, registerWithEmailDatabase } from '../lib/firebase';
+import { loginWithGoogle } from '../lib/firebase';
+import { fetchDevAuthEnabled, setDevToken, DEV_TEST_PROFILES, DevTestAccount } from '../lib/api';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialTab?: 'login' | 'register';
-  onLoginSuccess: (email: string, name: string, avatar: string, role: 'user' | 'admin') => void;
+  onLoginSuccess: () => void;
   promptMessage?: string;
 }
 
@@ -25,58 +26,28 @@ export default function AuthModal({
 }: AuthModalProps) {
   const [tab, setTab] = useState<'login' | 'register'>(initialTab);
 
-  // Form states
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [role, setRole] = useState<'user' | 'admin'>('user');
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [devAuthEnabled, setDevAuthEnabled] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) fetchDevAuthEnabled().then(setDevAuthEnabled);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    if (!email || !password) {
-      setError('Vui lòng điền đầy đủ Email và Mật khẩu.');
-      return;
-    }
-
-    if (tab === 'register' && !name) {
-      setError('Vui lòng nhập Họ và tên.');
-      return;
-    }
-
-    setIsSubmitting(true);
-
-    try {
-      if (tab === 'login') {
-        // Verify account exists in database
-        const user = await loginWithEmailDatabase(email);
-        onLoginSuccess(user.email, user.name, user.avatar, user.role);
-        onClose();
-      } else {
-        // Register new account into database
-        const user = await registerWithEmailDatabase(email, name, role);
-        onLoginSuccess(user.email, user.name, user.avatar, user.role);
-        onClose();
-      }
-    } catch (err: any) {
-      console.error("Auth submit error:", err);
-      setError(err?.message || 'Đăng nhập không thành công. Vui lòng thử lại!');
-    } finally {
-      setIsSubmitting(false);
-    }
+  const handleDevLogin = (account: DevTestAccount) => {
+    setDevToken(account);
+    onLoginSuccess();
+    onClose();
   };
 
   const handleGoogleLogin = async () => {
     setIsSubmitting(true);
     setError('');
     try {
-      const user = await loginWithGoogle();
-      onLoginSuccess(user.email, user.name, user.avatar, user.role);
+      await loginWithGoogle();
+      onLoginSuccess();
       onClose();
     } catch (err: any) {
       console.error("Google auth error:", err);
@@ -190,119 +161,34 @@ export default function AuthModal({
             <span>{tab === 'login' ? 'Đăng nhập bằng Google' : 'Đăng ký nhanh bằng Google'}</span>
           </button>
 
-          <div className="flex items-center gap-3 my-2">
-            <div className="flex-1 h-px bg-slate-200" />
-            <span className="text-[11px] font-bold text-slate-400 uppercase">Hoặc dùng Email</span>
-            <div className="flex-1 h-px bg-slate-200" />
-          </div>
-
           {error && (
             <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium rounded-xl">
               {error}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-3.5">
-            {tab === 'register' && (
-              <div className="space-y-1">
-                <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide block">
-                  Họ và tên
-                </label>
-                <div className="relative flex items-center">
-                  <User className="w-4 h-4 text-slate-400 absolute left-3.5" />
-                  <input
-                    type="text"
-                    required
-                    placeholder="Nguyễn Văn A"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-800 font-medium focus:bg-white focus:border-blue-500 focus:outline-none transition-all"
-                  />
-                </div>
-              </div>
-            )}
+          <p className="text-[11px] text-slate-400 text-center leading-relaxed">
+            86Job hiện chỉ hỗ trợ đăng nhập bằng tài khoản Google để bảo vệ tài khoản của bạn.
+          </p>
 
-            <div className="space-y-1">
-              <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide block">
-                Địa chỉ Email
-              </label>
-              <div className="relative flex items-center">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5" />
-                <input
-                  type="email"
-                  required
-                  placeholder="your.email@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-800 font-medium focus:bg-white focus:border-blue-500 focus:outline-none transition-all"
-                />
+          {/* Local test accounts: only on a dev server started with DEV_AUTH=1 */}
+          {devAuthEnabled && (
+            <div className="rounded-2xl border border-dashed border-amber-300 bg-amber-50 p-3 space-y-2">
+              <p className="text-xs font-bold text-amber-800">Tài khoản test (chỉ trên máy dev)</p>
+              <div className="grid grid-cols-2 gap-2">
+                {(Object.keys(DEV_TEST_PROFILES) as DevTestAccount[]).map(account => (
+                  <button
+                    key={account}
+                    type="button"
+                    onClick={() => handleDevLogin(account)}
+                    className="py-2.5 px-3 rounded-full bg-white border border-amber-200 text-xs font-bold text-amber-900 hover:bg-amber-100 cursor-pointer"
+                  >
+                    {DEV_TEST_PROFILES[account].name}
+                  </button>
+                ))}
               </div>
             </div>
-
-            <div className="space-y-1">
-              <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide block">
-                Mật khẩu
-              </label>
-              <div className="relative flex items-center">
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5" />
-                <input
-                  type="password"
-                  required
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-800 font-medium focus:bg-white focus:border-blue-500 focus:outline-none transition-all"
-                />
-              </div>
-            </div>
-
-            {tab === 'register' && (
-              <div className="space-y-1">
-                <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide block">
-                  Vai trò của bạn
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setRole('user')}
-                    className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
-                      role === 'user'
-                        ? 'bg-blue-50 border-blue-500 text-blue-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    🎓 Du học sinh / Người tìm việc
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRole('admin')}
-                    className={`py-2 px-3 text-xs font-extrabold rounded-xl border transition-all cursor-pointer ${
-                      role === 'admin'
-                        ? 'bg-purple-50 border-purple-500 text-purple-700'
-                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    🏢 Nhà tuyển dụng / Quản trị
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
-            >
-              {isSubmitting ? (
-                <span>Đang xử lý...</span>
-              ) : (
-                <>
-                  <span>{tab === 'login' ? 'Đăng nhập ngay' : 'Tạo tài khoản ngay'}</span>
-                  <ArrowRight className="w-4 h-4" />
-                </>
-              )}
-            </button>
-          </form>
+          )}
 
         </div>
       </div>

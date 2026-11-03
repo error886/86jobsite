@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+db.json
+.taste-skill/
+.claude/settings.local.json
+.impeccable/hook.cache.json
+.impeccable/config.local.json

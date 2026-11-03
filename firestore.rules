@@ -45,7 +45,8 @@ service cloud.firestore {
     // --- USERS COLLECTION ---
     match /users/{userId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && isOwner(userId) && isValidUser(incoming());
+      // New profiles can never grant themselves admin
+      allow create: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) && (incoming().role == 'user' || isAdmin());
       allow update: if isSignedIn() && (
         isAdmin() || 
         (isOwner(userId) && isValidUser(incoming()) && incoming().role == existing().role)

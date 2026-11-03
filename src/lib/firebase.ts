@@ -17,10 +17,6 @@ import {
   getDoc, 
   setDoc, 
   getDocFromServer,
-  collection,
-  query,
-  where,
-  getDocs
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { User } from '../types';
@@ -92,7 +88,8 @@ export async function loginWithGoogle(): Promise<User> {
     const email = fbUser.email || '';
     const name = fbUser.displayName || email.split('@')[0] || 'Người dùng Google';
     const avatar = fbUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(email)}`;
-    const role = (email === 'lechidaicma@gmail.com' || email === 'cuong.soft86@gmail.com') ? 'admin' : 'user';
+    // Profiles are always created as 'user'; admin rights are decided by the server
+    const role = 'user' as const;
 
     const userDocRef = doc(db, 'users', uid);
     const pathForUser = `users/${uid}`;
@@ -132,93 +129,6 @@ export async function loginWithGoogle(): Promise<User> {
   } catch (authErr) {
     console.error("Google Auth error:", authErr);
     throw authErr;
-  }
-}
-
-/**
- * Login with Email checking against Firestore database users collection
- */
-export async function loginWithEmailDatabase(email: string): Promise<User> {
-  const targetEmail = email.trim().toLowerCase();
-  const isAdminEmail = targetEmail === 'cuong.soft86@gmail.com' || targetEmail === 'admin@86job.vn' || targetEmail === 'lechidaicma@gmail.com' || targetEmail.includes('admin');
-  
-  try {
-    const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('email', '==', targetEmail));
-    const querySnapshot = await getDocs(q);
-
-    if (querySnapshot.empty) {
-      throw new Error("Tài khoản chưa được đăng ký trong hệ thống! Vui lòng kiểm tra lại Email hoặc chuyển sang tab Đăng ký.");
-    }
-
-    const userDoc = querySnapshot.docs[0];
-    const data = userDoc.data() as User;
-    
-    // Always assign admin role if email matches admin emails
-    const finalRole: 'user' | 'admin' = isAdminEmail ? 'admin' : (data.role || 'user');
-
-    return {
-      ...data,
-      role: finalRole,
-      id: userDoc.id
-    };
-  } catch (err: any) {
-    if (err.message && err.message.includes("Tài khoản chưa được đăng ký")) {
-      throw err;
-    }
-    console.warn("Firestore query error during login:", err);
-    throw new Error("Tài khoản chưa được đăng ký trong hệ thống! Vui lòng chuyển sang tab Đăng ký.");
-  }
-}
-
-/**
- * Register user with Email and save into Firestore database
- */
-export async function registerWithEmailDatabase(
-  email: string,
-  name: string,
-  role: 'user' | 'admin'
-): Promise<User> {
-  const targetEmail = email.trim().toLowerCase();
-  const isAdminEmail = targetEmail === 'cuong.soft86@gmail.com' || targetEmail === 'admin@86job.vn' || targetEmail === 'lechidaicma@gmail.com' || targetEmail.includes('admin');
-  const finalRole: 'user' | 'admin' = isAdminEmail ? 'admin' : role;
-
-  try {
-    const usersRef = collection(db, 'users');
-    const q = query(usersRef, where('email', '==', targetEmail));
-    const querySnapshot = await getDocs(q);
-
-    if (!querySnapshot.empty) {
-      throw new Error("Email này đã được đăng ký trong hệ thống! Vui lòng chuyển sang tab Đăng nhập.");
-    }
-
-    const newUid = `u_${Date.now()}`;
-    const userDocRef = doc(db, 'users', newUid);
-    const newUser: User = {
-      id: newUid,
-      name,
-      email: targetEmail,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(targetEmail)}`,
-      role: finalRole,
-      createdAt: new Date().toISOString()
-    };
-
-    await setDoc(userDocRef, newUser);
-    return newUser;
-  } catch (err: any) {
-    if (err.message && err.message.includes("đã được đăng ký")) {
-      throw err;
-    }
-    console.warn("Firestore error during registration:", err);
-    // Fallback if firestore rules block write
-    return {
-      id: `u_${Date.now()}`,
-      name,
-      email: targetEmail,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(targetEmail)}`,
-      role: finalRole,
-      createdAt: new Date().toISOString()
-    };
   }
 }
 

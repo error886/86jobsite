@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell, Legend } from 'recharts';
 import { Job, CrawlerLog, User } from '../types';
+import { apiFetch } from '../lib/api';
 
 interface AdminPanelProps {
   jobs: Job[];
@@ -34,7 +35,7 @@ export default function AdminPanel({
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch('/api/crawler/logs').catch(() => null);
+      const res = await apiFetch('/api/crawler/logs').catch(() => null);
       if (res && res.ok) {
         const data = await res.json();
         setLogs(data);
@@ -44,21 +45,8 @@ export default function AdminPanel({
     }
   };
 
-  const fetchUsers = async () => {
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'checker@kjobvn.com', name: 'Temporary Fetcher' })
-      }).catch(() => null);
-    } catch (err) {
-      console.warn('User fetch notice:', err);
-    }
-  };
-
   useEffect(() => {
     fetchLogs();
-    fetchUsers();
     // Poll logs every 15 seconds to keep dashboard alive
     const interval = setInterval(fetchLogs, 15000);
     return () => clearInterval(interval);

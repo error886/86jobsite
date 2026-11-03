@@ -1,10 +1,36 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
+/* 86Job look: slate neutrals, 86Job blue (#2563eb family) for actions, wages and selection,
+   rounded cards with soft shadows, bold Outfit headings over Inter text.
+   Red only for a wage under the legal minimum. */
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Outfit", sans-serif;
+  --font-display: "Outfit", "Inter", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-ground: #f8fafc;        /* slate-50 */
+  --color-surface: #ffffff;
+  --color-raised: #f1f5f9;        /* slate-100 */
+  --color-line: #e2e8f0;          /* slate-200 */
+  --color-rule: #f1f5f9;
+  --color-control: #cbd5e1;       /* slate-300 */
+  --color-ink: #0f172a;           /* slate-900 */
+  --color-muted: #64748b;         /* slate-500, 4.8:1 on white */
+  --color-primary: #2563eb;       /* 86Job blue */
+  --color-primary-hover: #1d4ed8;
+  --color-wage: #2563eb;
+  --color-brand-soft: #eff6ff;    /* blue-50 */
+  --color-orange: #ff7a00;
+  --color-orange-hover: #ff8d26;
+  --color-positive: #059669;
+  --color-negative: #e11d48;      /* rose-600 */
+  --color-pill-negative-bg: #fff1f2;
+  --color-pill-negative-ink: #9f1239;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Custom leaflet map marker sizing fixing */
@@ -23,3 +49,87 @@
 }
 
 
+
+/* ---------- Map pins: the wage is the pin (the one hue marks the selected one) ---------- */
+.job-pin {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #2563eb;
+  border: 2px solid #ffffff;
+  font: 800 13px/1 "Inter", system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.22);
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+.job-pin::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  background: inherit;
+  border-right: 1px solid;
+  border-bottom: 1px solid;
+  border-color: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+.job-pin:hover { transform: scale(1.06); }
+.job-pin:active { transform: scale(0.96); }
+.job-pin:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.job-pin[data-under='true'] { color: #e11d48; }
+.job-pin[data-selected='true'] {
+  background: #2563eb;
+  border-color: #ffffff;
+  color: #ffffff;
+  transform: scale(1.1);
+}
+.job-pin-wrap { width: 0 !important; height: 0 !important; background: none; border: 0; }
+.job-pin-wrap .job-pin { position: absolute; left: 0; bottom: 6px; transform: translateX(-50%); }
+.job-pin-wrap .job-pin:active { transform: translateX(-50%) scale(0.96); }
+.job-pin-wrap .job-pin:hover { transform: translateX(-50%) scale(1.06); }
+.job-pin-wrap .job-pin[data-selected='true'] { transform: translateX(-50%) scale(1.1); }
+
+.user-dot {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #059669;
+  border: 3px solid #ffffff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
+}
+
+.walk-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #ffffff;
+  border: 2px solid #ffffff;
+  font: 800 12px/1 "Inter", system-ui, sans-serif;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
+  white-space: nowrap;
+}
+.walk-badge-wrap { width: 0 !important; height: 0 !important; background: none; border: 0; }
+.walk-badge-wrap .walk-badge { position: absolute; transform: translate(-50%, -50%); }
+
+@media (prefers-reduced-motion: reduce) {
+  .job-pin, .job-pin:active { transition: none; }
+}
+.job-pin-cluster { background: #0f172a; border-color: #ffffff; color: #ffffff; }
+.job-pin-cluster:hover { background: #1e293b; }
+
+/* Keep the OpenStreetMap credit (required by its licence) inside the 16px page margin */
+.leaflet-container .leaflet-control-attribution { margin: 0 16px 8px 0; border-radius: 4px; }
+
+/* Straight-line estimate: quieter than a real route so it does not pass for one */
+.walk-badge-straight { background: #ffffff; color: #1e293b; border-color: #cbd5e1; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15); font-weight: 600; }

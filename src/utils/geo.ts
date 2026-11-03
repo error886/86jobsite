@@ -32,44 +32,28 @@ export function formatDistance(distanceKm: number): string {
   return `${distanceKm.toLocaleString('vi-VN', { maximumFractionDigits: 1 })} km`;
 }
 
-/**
- * Naver Map Directions URL
- */
 export interface RouteInfo {
+  /** 'tmap': a real walking route. 'straight': the straight line with a time estimated at 4.5 km/h. */
+  source: 'tmap' | 'straight';
   coordinates: [number, number][]; // [lat, lng] array
   durationSeconds: number;
   distanceMeters: number;
   midpoint: [number, number]; // [lat, lng]
 }
 
-/**
- * Generates realistic street-like grid turns between start and end coordinates
- */
-export function generateStreetGridRoute(
-  startLat: number,
-  startLng: number,
-  endLat: number,
-  endLng: number
-): [number, number][] {
-  const points: [number, number][] = [];
-  points.push([startLat, startLng]);
-
-  const dLat = endLat - startLat;
-  const dLng = endLng - startLng;
-
-  // Build a 6-turn street grid simulation
-  const p1: [number, number] = [startLat + dLat * 0.15, startLng];
-  const p2: [number, number] = [startLat + dLat * 0.15, startLng + dLng * 0.45];
-  const p3: [number, number] = [startLat + dLat * 0.65, startLng + dLng * 0.45];
-  const p4: [number, number] = [startLat + dLat * 0.65, startLng + dLng * 0.9];
-  const p5: [number, number] = [endLat, startLng + dLng * 0.9];
-
-  points.push(p1, p2, p3, p4, p5, [endLat, endLng]);
-  return points;
+function withMidpoint(route: Omit<RouteInfo, 'midpoint'>): RouteInfo {
+  const coords = route.coordinates;
+  const mid = coords[Math.floor(coords.length / 2)];
+  const midpoint: [number, number] = coords.length > 2
+    ? mid
+    : [(coords[0][0] + coords[coords.length - 1][0]) / 2, (coords[0][1] + coords[coords.length - 1][1]) / 2];
+  return { ...route, midpoint };
 }
 
 /**
- * Fetches turn-by-turn route path between user location and job destination via OSRM.
+ * Walking route from the server (TMAP pedestrian routes). When the server cannot reach TMAP it
+ * answers with the straight line; when the server itself is unreachable we draw that line here.
+ * A route is never invented.
  */
 export async function fetchWalkingRoute(
   startLat: number,
@@ -77,53 +61,33 @@ export async function fetchWalkingRoute(
   endLat: number,
   endLng: number
 ): Promise<RouteInfo> {
-  const distKm = calculateDistanceKm(startLat, startLng, endLat, endLng);
-  const durationSeconds = Math.max(120, Math.round((distKm / 4.5) * 3600)); // ~4.5 km/h walking speed
-
   try {
-    const url = `https://router.project-osrm.org/route/v1/foot/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
-    
-    // Add 1.5s timeout so the map renders instantly without hanging
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1500);
-
-    const res = await fetch(url, { signal: controller.signal });
+    const timeoutId = setTimeout(() => controller.abort(), 7000);
+    const res = await fetch(`/api/route/walk?from=${startLat},${startLng}&to=${endLat},${endLng}`, { signal: controller.signal });
     clearTimeout(timeoutId);
-
     if (res.ok) {
       const data = await res.json();
-      if (data.routes && data.routes.length > 0) {
-        const route = data.routes[0];
-        const coords: [number, number][] = route.geometry.coordinates.map(
-          (pt: [number, number]) => [pt[1], pt[0]]
-        );
-        const midIndex = Math.floor(coords.length / 2);
-        const midpoint = coords[midIndex] || [(startLat + endLat) / 2, (startLng + endLng) / 2];
-        return {
-          coordinates: coords,
-          durationSeconds: route.duration,
-          distanceMeters: route.distance,
-          midpoint
-        };
+      if (Array.isArray(data.coordinates) && data.coordinates.length >= 2) {
+        return withMidpoint(data);
       }
     }
   } catch (err) {
-    console.warn('OSRM routing fetch skipped or timed out, using street grid polyline:', err);
+    console.warn('Walking route unavailable, drawing the straight line:', err);
   }
 
-  // Fallback: Multi-turn street grid polyline
-  const gridCoords = generateStreetGridRoute(startLat, startLng, endLat, endLng);
-  const midIndex = Math.floor(gridCoords.length / 2);
-  const midpoint = gridCoords[midIndex];
-
-  return {
-    coordinates: gridCoords,
-    durationSeconds,
-    distanceMeters: distKm * 1000,
-    midpoint
-  };
+  const distanceMeters = calculateDistanceKm(startLat, startLng, endLat, endLng) * 1000;
+  return withMidpoint({
+    source: 'straight',
+    coordinates: [[startLat, startLng], [endLat, endLng]],
+    distanceMeters,
+    durationSeconds: Math.round((distanceMeters / 1000 / 4.5) * 3600)
+  });
 }
 
+/**
+ * Directions links into the map apps (Naver, Kakao, Google)
+ */
 export function getNaverMapDirectionUrl(
   jobLat: number,
   jobLng: number,

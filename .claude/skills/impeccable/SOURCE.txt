@@ -1,0 +1,1 @@
+Source: https://github.com/pbakaus/impeccable @ 9fadc41 (.claude/skills/impeccable, skill v4.8.0, engine 0.1.18)

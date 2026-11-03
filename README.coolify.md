@@ -44,6 +44,9 @@ Tài liệu này hướng dẫn bạn cách tối ưu hóa và triển khai ứn
 
 Bạn có thể cấu hình các biến sau trong phần **Environment Variables** của ứng dụng trên Coolify:
 
+### 0. Quản trị viên (bắt buộc)
+- `ADMIN_EMAILS`: Danh sách email Google có quyền admin, cách nhau bởi dấu phẩy (ví dụ `a@gmail.com,b@gmail.com`). Server kiểm tra quyền dựa trên biến này; nếu để trống sẽ không ai vào được trang quản trị.
+
 ### 1. Trí tuệ nhân tạo (AI Assistant)
 - `GEMINI_API_KEY`: Khóa API Gemini của bạn để phân tích tự động bài đăng tuyển dụng bằng AI (Nếu không có, hệ thống sẽ tự động chuyển sang parser Regex dự phòng thông minh).
 

@@ -6,6 +6,8 @@
 import React, { useState } from 'react';
 import { Send, Sparkles, Plus, AlertCircle, RefreshCw, FileText, CheckCircle, Info, Edit3, Wand2, Lock, LogIn, UserPlus } from 'lucide-react';
 import { JobCategory, Job } from '../types';
+import { apiFetch } from '../lib/api';
+import { MIN_HOURLY_WAGE } from '../utils/wage';
 
 interface AIParsingToolProps {
   currentUser: any;
@@ -26,7 +28,7 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
   // Form Fields State
   const [title, setTitle] = useState('');
   const [company, setCompany] = useState('');
-  const [salary, setSalary] = useState(10030); // 2026 minimum wage default
+  const [salary, setSalary] = useState(MIN_HOURLY_WAGE); // minimum wage default
   const [salaryType, setSalaryType] = useState<'Hourly' | 'Monthly'>('Hourly');
   const [city, setCity] = useState('Seoul');
   const [district, setDistrict] = useState('');
@@ -91,7 +93,7 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
     setSuccessMsg(null);
 
     try {
-      const res = await fetch('/api/ai/parse', {
+      const res = await apiFetch('/api/ai/parse', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -122,7 +124,7 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
 
       // Populate Form Fields
       setTitle(parsed.title || '');
-      setSalary(parsed.salary || 10030);
+      setSalary(parsed.salary || MIN_HOURLY_WAGE);
       setSalaryType(parsed.salary > 500000 ? 'Monthly' : 'Hourly');
       setCity(parsed.city || 'Seoul');
       setDistrict(parsed.district || '');
@@ -183,7 +185,7 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
         status: is_admin ? 'approved' : 'pending' // Admin posts auto-approved, users go to pending
       };
 
-      const res = await fetch('/api/jobs', {
+      const res = await apiFetch('/api/jobs', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -198,7 +200,7 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
 
       onJobCreated(data);
       setSuccessMsg(
-        is_admin 
+        data.status === 'approved'
           ? 'Đăng tin thành công! Công việc đã được duyệt tự động và xuất hiện trên Bản đồ.'
           : 'Gửi bài đăng thành công! Tin tuyển dụng của bạn đang ở trạng thái Chờ phê duyệt từ Admin.'
       );
@@ -516,7 +518,7 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
                 <select
                   value={salaryType}
                   onChange={(e) => setSalaryType(e.target.value as 'Hourly' | 'Monthly')}
-                  className="p-3 rounded-xl border border-slate-200 bg-slate-50/50 focus:border-blue-500 outline-none transition-all text-sm font-semibold cursor-pointer"
+                  className="flex-none p-3 rounded-xl border border-slate-200 bg-slate-50/50 focus:border-blue-500 outline-none transition-all text-sm font-semibold cursor-pointer"
                 >
                   <option value="Hourly">Theo giờ</option>
                   <option value="Monthly">Theo tháng</option>
@@ -526,9 +528,9 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
                   value={salary}
                   onChange={(e) => setSalary(parseInt(e.target.value, 10) || 0)}
                   required
-                  className="flex-1 p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:border-blue-500 outline-none transition-all text-sm font-extrabold"
+                  className="flex-1 min-w-0 p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:border-blue-500 outline-none transition-all text-sm font-extrabold"
                 />
-                <span className="p-3 text-sm font-bold text-slate-500">KRW</span>
+                <span className="flex-none py-3 text-sm font-bold text-slate-500">KRW</span>
               </div>
             </div>
 

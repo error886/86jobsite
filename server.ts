@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import path from 'path';
-import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import { 
@@ -15,22 +15,26 @@ import {
   updateJobStatus, 
   deleteJob, 
   getBookmarks, 
-  toggleBookmark, 
-  loginOrRegister, 
-  getCrawlerLogs, 
+  toggleBookmark,
+  getCrawlerLogs,
   addCrawlerLog,
-  initializeDb
+  initializeDb,
+  checkSupabaseConnection
 } from './server/db';
+import { attachUser, getAuthUser, requireAuth, requireAdmin, rateLimit, DEV_AUTH_ENABLED } from './server/auth';
+import { getWalkRoute } from './server/route';
 import { JobCategory, Job } from './src/types';
-
-// Load environment variables
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+const VALID_CATEGORIES: JobCategory[] = ['Restaurant', 'Cafe', 'Factory', 'Warehouse', 'Convenience Store', 'Office', 'Other'];
+
 // Body parser
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
+
+// Verify the Firebase ID token (if sent) for every API request
+app.use('/api', attachUser);
 
 // Lazy-initialized Gemini API client
 let aiClient: GoogleGenAI | null = null;
@@ -62,38 +66,44 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// GET /api/db-status - Check Supabase & Firestore connection status
-app.get('/api/db-status', (req: Request, res: Response) => {
-  const isSupabaseConfigured = Boolean(
-    process.env.SUPABASE_URL && 
-    (process.env.SUPABASE_KEY || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY)
-  );
+// GET /api/db-status - Check Supabase connection status (Admin only)
+app.get('/api/db-status', requireAdmin, async (req: Request, res: Response) => {
+  const supabaseStatus = await checkSupabaseConnection();
 
   res.json({
-    activeDatabase: isSupabaseConfigured ? 'Supabase' : 'Firebase Firestore & Local DB',
+    activeDatabase: supabaseStatus.connected ? 'Supabase' : 'Local DB fallback',
     supabase: {
-      connected: isSupabaseConfigured,
-      url: process.env.SUPABASE_URL || null,
-      message: isSupabaseConfigured 
-        ? 'Đã kết nối thành công với Supabase.' 
-        : 'Chưa kết nối Supabase. Chưa cấu hình SUPABASE_URL và SUPABASE_KEY trong biến môi trường (.env).'
-    },
-    firebase: {
-      configured: true,
-      databaseId: 'ai-studio-remix86job-07dcb210-375c-443e-b482-965b49b98727',
-      message: 'Đã kết nối và đang hoạt động chính với Google Firebase Firestore.'
+      configured: supabaseStatus.configured,
+      connected: supabaseStatus.connected,
+      message: supabaseStatus.message
     }
   });
+});
+
+// GET /api/auth/me - Current user's server-side role
+app.get('/api/auth/me', requireAuth, (req: Request, res: Response) => {
+  const user = getAuthUser(res)!;
+  res.json({ uid: user.uid, email: user.email, role: user.isAdmin ? 'admin' : 'user' });
+});
+
+// GET /api/auth/dev-status - Whether local test accounts are on (development server with DEV_AUTH=1 only)
+app.get('/api/auth/dev-status', (req: Request, res: Response) => {
+  res.json({ enabled: DEV_AUTH_ENABLED });
 });
 
 // 2. GET /api/jobs - Supports search and advanced filters
 app.get('/api/jobs', async (req: Request, res: Response) => {
   try {
-    const { q, city, category, minSalary, salaryType, status, userId } = req.query;
+    const { q, city, category, minSalary, salaryType, status } = req.query;
+
+    // Only admins can list pending or rejected jobs
+    if (status && status !== 'approved' && !getAuthUser(res)?.isAdmin) {
+      return res.status(403).json({ error: 'Bạn không có quyền xem tin chưa được duyệt' });
+    }
+
     let jobs = await getJobs();
 
-    // Filtering by status. By default, regular users see approved jobs.
-    // Admin can query pending or rejected.
+    // Filtering by status. By default, everyone sees approved jobs.
     if (status) {
       jobs = jobs.filter(j => j.status === status);
     } else {
@@ -167,7 +177,7 @@ app.get('/api/jobs/map', async (req: Request, res: Response) => {
 app.get('/api/jobs/:id', async (req: Request, res: Response) => {
   try {
     const job = await getJobById(req.params.id);
-    if (!job) {
+    if (!job || (job.status !== 'approved' && !getAuthUser(res)?.isAdmin)) {
       return res.status(404).json({ error: 'Không tìm thấy công việc' });
     }
     res.json(job);
@@ -176,17 +186,38 @@ app.get('/api/jobs/:id', async (req: Request, res: Response) => {
   }
 });
 
-// 6. POST /api/jobs - Post a new job
-app.post('/api/jobs', async (req: Request, res: Response) => {
+// 6. POST /api/jobs - Post a new job (signed-in users; admin posts can be approved directly)
+app.post('/api/jobs', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { 
-      title, company, salary, salaryType, city, district, 
-      address, category, workingTime, description, phone, 
-      kakao, line, source, sourceUrl, latitude, longitude, status 
+    const {
+      title, company, salary, salaryType, city, district,
+      address, category, workingTime, description, phone,
+      kakao, line, sourceUrl, latitude, longitude, status
     } = req.body;
+    const isAdmin = getAuthUser(res)!.isAdmin;
 
     if (!title || !company || !salary || !city || !district || !address || !category || !workingTime || !description) {
       return res.status(400).json({ error: 'Vui lòng cung cấp đầy đủ thông tin bắt buộc' });
+    }
+
+    const tooLong = (v: unknown, max: number) => v != null && String(v).length > max;
+    if (
+      tooLong(title, 200) || tooLong(company, 100) || tooLong(city, 100) || tooLong(district, 100) ||
+      tooLong(address, 256) || tooLong(workingTime, 200) || tooLong(description, 5000) ||
+      tooLong(phone, 30) || tooLong(kakao, 100) || tooLong(line, 100) || tooLong(sourceUrl, 512)
+    ) {
+      return res.status(400).json({ error: 'Một số trường thông tin quá dài' });
+    }
+
+    if (!VALID_CATEGORIES.includes(category)) {
+      return res.status(400).json({ error: 'Ngành nghề không hợp lệ' });
+    }
+
+    const finalSalaryType: Job['salaryType'] = salaryType === 'Monthly' ? 'Monthly' : 'Hourly';
+    const salaryNum = parseInt(salary, 10);
+    const [minSalary, maxSalary] = finalSalaryType === 'Hourly' ? [5000, 100000] : [500000, 20000000];
+    if (isNaN(salaryNum) || salaryNum < minSalary || salaryNum > maxSalary) {
+      return res.status(400).json({ error: 'Mức lương không hợp lệ' });
     }
 
     // Standardize lat/long if not provided
@@ -194,7 +225,10 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
     let finalLat = parseFloat(latitude);
     let finalLong = parseFloat(longitude);
 
-    if (isNaN(finalLat) || isNaN(finalLong)) {
+    // Coordinates outside South Korea are treated as missing
+    const inKorea = finalLat >= 33 && finalLat <= 39 && finalLong >= 124 && finalLong <= 132;
+
+    if (isNaN(finalLat) || isNaN(finalLong) || !inKorea) {
       const cityCoords: Record<string, { lat: number; lng: number }> = {
         'seoul': { lat: 37.5665, lng: 126.9780 },
         'daejeon': { lat: 36.3504, lng: 127.3845 },
@@ -215,8 +249,8 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
     const jobData = {
       title,
       company,
-      salary: parseInt(salary, 10),
-      salaryType: salaryType || 'Hourly',
+      salary: salaryNum,
+      salaryType: finalSalaryType,
       city,
       district,
       address,
@@ -226,11 +260,12 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
       phone,
       kakao,
       line,
-      source: source || 'User',
+      source: 'User' as const,
       sourceUrl,
       latitude: finalLat,
       longitude: finalLong,
-      status: status || 'pending' // Admin postings can pass 'approved' immediately
+      // Only admins may publish directly; everyone else goes through review
+      status: isAdmin && status === 'approved' ? 'approved' as const : 'pending' as const
     };
 
     const newJob = await addJob(jobData);
@@ -241,7 +276,7 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
 });
 
 // 7. POST /api/jobs/:id/status - Approve or reject a job (Admin only)
-app.post('/api/jobs/:id/status', async (req: Request, res: Response) => {
+app.post('/api/jobs/:id/status', requireAdmin, async (req: Request, res: Response) => {
   try {
     const { status } = req.body;
     if (status !== 'approved' && status !== 'rejected') {
@@ -257,8 +292,8 @@ app.post('/api/jobs/:id/status', async (req: Request, res: Response) => {
   }
 });
 
-// 8. DELETE /api/jobs/:id - Delete a job
-app.delete('/api/jobs/:id', async (req: Request, res: Response) => {
+// 8. DELETE /api/jobs/:id - Delete a job (Admin only)
+app.delete('/api/jobs/:id', requireAdmin, async (req: Request, res: Response) => {
   try {
     const deleted = await deleteJob(req.params.id);
     if (!deleted) {
@@ -270,9 +305,12 @@ app.delete('/api/jobs/:id', async (req: Request, res: Response) => {
   }
 });
 
-// 9. GET /api/bookmarks/:userId - Get bookmarks
-app.get('/api/bookmarks/:userId', async (req: Request, res: Response) => {
+// 9. GET /api/bookmarks/:userId - Get the signed-in user's own bookmarks
+app.get('/api/bookmarks/:userId', requireAuth, async (req: Request, res: Response) => {
   try {
+    if (req.params.userId !== getAuthUser(res)!.uid) {
+      return res.status(403).json({ error: 'Bạn chỉ xem được danh sách yêu thích của chính mình' });
+    }
     const bookmarks = await getBookmarks(req.params.userId);
     res.json(bookmarks);
   } catch (error: any) {
@@ -281,35 +319,22 @@ app.get('/api/bookmarks/:userId', async (req: Request, res: Response) => {
 });
 
 // 10. POST /api/bookmarks/toggle - Toggle bookmark
-app.post('/api/bookmarks/toggle', async (req: Request, res: Response) => {
+app.post('/api/bookmarks/toggle', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { userId, jobId } = req.body;
-    if (!userId || !jobId) {
-      return res.status(400).json({ error: 'Thiếu userId hoặc jobId' });
+    const { jobId } = req.body;
+    if (!jobId) {
+      return res.status(400).json({ error: 'Thiếu jobId' });
     }
-    const result = await toggleBookmark(userId, jobId);
+    // The user id always comes from the verified token, never from the request body
+    const result = await toggleBookmark(getAuthUser(res)!.uid, String(jobId));
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// 11. POST /api/auth/login - Google/Kakao login simulation
-app.post('/api/auth/login', async (req: Request, res: Response) => {
-  try {
-    const { email, name, avatar, role } = req.body;
-    if (!email || !name) {
-      return res.status(400).json({ error: 'Thiếu email hoặc tên đăng nhập' });
-    }
-    const user = await loginOrRegister(email, name, avatar, role || 'user');
-    res.json(user);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 12. GET /api/crawler/logs - Get crawler/parser history
-app.get('/api/crawler/logs', async (req: Request, res: Response) => {
+// 12. GET /api/crawler/logs - Get crawler/parser history (Admin only)
+app.get('/api/crawler/logs', requireAdmin, async (req: Request, res: Response) => {
   try {
     res.json(await getCrawlerLogs());
   } catch (error: any) {
@@ -318,7 +343,7 @@ app.get('/api/crawler/logs', async (req: Request, res: Response) => {
 });
 
 // 13. POST /api/crawler/simulate - Simulate scanning Facebook links or Alba apps
-app.post('/api/crawler/simulate', async (req: Request, res: Response) => {
+app.post('/api/crawler/simulate', requireAdmin, async (req: Request, res: Response) => {
   try {
     const { source, url } = req.body;
     if (!source) {
@@ -407,11 +432,27 @@ app.post('/api/crawler/simulate', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/route/walk?from=lat,lng&to=lat,lng - Walking route (TMAP), or the straight line when unavailable
+const inKoreaBox = (lat: number, lng: number) => lat >= 33 && lat <= 39 && lng >= 124 && lng <= 132;
+app.get('/api/route/walk', rateLimit(120, 60 * 60 * 1000), async (req: Request, res: Response) => {
+  const parse = (v: unknown) => String(v || '').split(',').map(Number);
+  const [lat1, lng1] = parse(req.query.from);
+  const [lat2, lng2] = parse(req.query.to);
+  if ([lat1, lng1, lat2, lng2].some(n => !Number.isFinite(n)) || !inKoreaBox(lat1, lng1) || !inKoreaBox(lat2, lng2)) {
+    return res.status(400).json({ error: 'Toạ độ không hợp lệ' });
+  }
+  res.json(await getWalkRoute(lat1, lng1, lat2, lng2));
+});
+
 // 14. POST /api/ai/parse - AI Parser with Gemini API (And full regex fallback)
-app.post('/api/ai/parse', async (req: Request, res: Response) => {
+// Signed-in users only, at most 20 parses per user per hour to cap AI costs
+app.post('/api/ai/parse', requireAuth, rateLimit(20, 60 * 60 * 1000), async (req: Request, res: Response) => {
   const { text } = req.body;
   if (!text || String(text).trim() === '') {
     return res.status(400).json({ error: 'Nội dung văn bản phân tích không được để trống' });
+  }
+  if (String(text).length > 8000) {
+    return res.status(400).json({ error: 'Nội dung quá dài (tối đa 8.000 ký tự)' });
   }
 
   const cleanText = String(text).trim();
@@ -562,6 +603,12 @@ Rules for extraction:
               temperature: 0.1
             })
           });
+
+          // No credit or a bad key fails the same way for every model: go straight to Gemini
+          if ([401, 402, 403].includes(openRouterRes.status)) {
+            console.warn(`OpenRouter unavailable (HTTP ${openRouterRes.status}), skipping to Gemini`);
+            break;
+          }
 
           if (openRouterRes.ok) {
             const data = await openRouterRes.json();
