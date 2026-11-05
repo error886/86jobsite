@@ -45,13 +45,31 @@ async function resolveKakaoKey(): Promise<string> {
 }
 
 // Kakao zoom levels run the other way from Leaflet: 1 is street level, 14 is the whole country
-const KAKAO_LEVEL_COUNTRY = 13;
 const KAKAO_LEVEL_NEIGHBORHOOD = 4;
 // Space kept clear above the pins for the floating search and chip rows on a phone
 const TOP_INSET_PHONE = 116;
 const SIDE_INSET = 40;
-// Radius the map opens on around the user's position
-const USER_VIEW_RADIUS_M = 1000;
+// The map shows about this far in every direction (around the user, or the busiest job area)
+const VIEW_RADIUS_M = 500;
+const KAKAO_LEVEL_START = 5;
+// Seoul City Hall: only used for the first frame, before the jobs or the position are known
+const DEFAULT_CENTER: [number, number] = [37.5665, 126.978];
+
+/** The job with the most other jobs within 2 km: where the first screen shows the most pins up close. */
+function busiestSpot(jobs: Job[]): [number, number] {
+  let best = jobs[0];
+  let bestCount = -1;
+  for (const a of jobs) {
+    let count = 0;
+    for (const b of jobs) {
+      const dLat = (a.latitude - b.latitude) * 111.32;
+      const dLng = (a.longitude - b.longitude) * 111.32 * Math.cos((a.latitude * Math.PI) / 180);
+      if (dLat * dLat + dLng * dLng <= 4) count++;
+    }
+    if (count > bestCount) { best = a; bestCount = count; }
+  }
+  return [best.latitude, best.longitude];
+}
 
 // ----------------------------------------------------
 // MARKER HTML (shared by Kakao and Leaflet). Styled in index.css (.job-pin).
@@ -200,21 +218,24 @@ export default function MapContainer({
     }
   };
 
-  /** Every job pin. */
-  const fitAll = () => fitPoints(placedRef.current.map(j => [j.latitude, j.longitude] as [number, number]));
-
-  /** About 1 km in every direction around the user, the way map apps open on "near me". */
-  const fitAroundUser = (lat: number, lng: number) => {
-    const dLat = USER_VIEW_RADIUS_M / 111320;
-    const dLng = USER_VIEW_RADIUS_M / (111320 * Math.cos((lat * Math.PI) / 180));
+  /** About VIEW_RADIUS_M in every direction around a point, the way map apps open on "near me". */
+  const fitAround = (lat: number, lng: number) => {
+    const dLat = VIEW_RADIUS_M / 111320;
+    const dLng = VIEW_RADIUS_M / (111320 * Math.cos((lat * Math.PI) / 180));
     fitPoints([[lat - dLat, lng - dLng], [lat + dLat, lng + dLng]], 16);
   };
 
-  // Once the map has opened on the user's surroundings, filters and sheet changes keep that view
-  const userViewRef = useRef(false);
+  // The map always shows about 500 m: around the user once their position is known, otherwise
+  // around the busiest spot for jobs. It never zooms out to the whole country on its own, and
+  // filters keep the area in view (like a map app), so only these two events move it.
+  const viewRef = useRef<{ kind: 'none' | 'jobs' | 'user'; lat: number; lng: number }>({ kind: 'none', lat: 0, lng: 0 });
+  const setView = (kind: 'jobs' | 'user', lat: number, lng: number) => {
+    viewRef.current = { kind, lat, lng };
+    fitAround(lat, lng);
+  };
   const refitView = () => {
-    if (userViewRef.current && userLocation) fitAroundUser(userLocation.lat, userLocation.lng);
-    else fitAll();
+    const v = viewRef.current;
+    if (v.kind !== 'none') fitAround(v.lat, v.lng);
   };
 
   // 1. Load Kakao Map, fall back to Leaflet if it is unavailable
@@ -240,8 +261,8 @@ export default function MapContainer({
     if (mapEngine === 'kakao') {
       const kakao = window.kakao;
       const map = new kakao.maps.Map(container, {
-        center: new kakao.maps.LatLng(36.3504, 127.3845),
-        level: KAKAO_LEVEL_COUNTRY
+        center: new kakao.maps.LatLng(DEFAULT_CENTER[0], DEFAULT_CENTER[1]),
+        level: KAKAO_LEVEL_START
       });
       // Phones zoom with two fingers; the control would sit under the chip row
       if (!isPhone()) map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.BOTTOMRIGHT);
@@ -255,7 +276,7 @@ export default function MapContainer({
       };
     }
 
-    const map = L.map(container, { zoomControl: !isPhone(), attributionControl: true }).setView([36.3504, 127.3845], 7);
+    const map = L.map(container, { zoomControl: !isPhone(), attributionControl: true }).setView(DEFAULT_CENTER, 15);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
       maxZoom: 19
@@ -312,7 +333,15 @@ export default function MapContainer({
         leafletPinsRef.current[job.id] = marker;
       });
     }
-    if (!userViewRef.current) fitAll();
+    // No position yet: open on the area with the most jobs, so the first screen shows pins up close.
+    // When the list changes (server data replacing the bundled sample, a filter) and that area no longer
+    // holds any job, move to the new busiest area; a view around the user is never moved here.
+    const v = viewRef.current;
+    const areaHasJobs = placed.some(j => Math.abs(j.latitude - v.lat) < 0.014 && Math.abs(j.longitude - v.lng) < 0.018);
+    if (placed.length > 0 && (v.kind === 'none' || (v.kind === 'jobs' && !areaHasJobs))) {
+      const [lat, lng] = busiestSpot(placed);
+      setView('jobs', lat, lng);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, mapEngine]);
 
@@ -446,9 +475,8 @@ export default function MapContainer({
 
   // 5b. First known position: open the map about 1 km around it (unless a job is already open)
   useEffect(() => {
-    if (userViewRef.current || !userLocation || mapEngine === 'loading' || selectedIdRef.current) return;
-    userViewRef.current = true;
-    fitAroundUser(userLocation.lat, userLocation.lng);
+    if (viewRef.current.kind === 'user' || !userLocation || mapEngine === 'loading' || selectedIdRef.current) return;
+    setView('user', userLocation.lat, userLocation.lng);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userLocation, mapEngine]);
 
@@ -457,8 +485,7 @@ export default function MapContainer({
   useEffect(() => {
     if (locateTick > handledTickRef.current && userLocation && mapEngine !== 'loading') {
       handledTickRef.current = locateTick;
-      userViewRef.current = true;
-      fitAroundUser(userLocation.lat, userLocation.lng);
+      setView('user', userLocation.lat, userLocation.lng);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locateTick, userLocation, mapEngine]);
