@@ -88,6 +88,16 @@ export async function fetchWalkingRoute(
 /**
  * Directions links into the map apps (Naver, Kakao, Google)
  */
+/**
+ * A place name safe to put in a map app's link path. Kakao answers 502 when the name holds a "/"
+ * (even encoded as %2F) and splits fields on ","; job titles often contain both
+ * ("Phục vụ quán nướng / 홀서빙").
+ */
+function linkName(name: string): string {
+  const clean = name.replace(/[\/,|#?%]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+  return encodeURIComponent(clean || '86Job');
+}
+
 export function getNaverMapDirectionUrl(
   jobLat: number,
   jobLng: number,
@@ -96,15 +106,13 @@ export function getNaverMapDirectionUrl(
   userLng?: number
 ): string {
   if (userLat && userLng) {
-    return `https://map.naver.com/v5/directions/${userLat},${userLng},${encodeURIComponent(
-      'Vị trí của tôi'
-    )}/${jobLat},${jobLng},${encodeURIComponent(jobTitle)}/-/transit`;
+    return `https://map.naver.com/v5/directions/${userLng},${userLat},${linkName('Vị trí của tôi')}/${jobLng},${jobLat},${linkName(jobTitle)}/-/walk`;
   }
-  return `https://map.naver.com/v5/search/${encodeURIComponent(jobTitle)}/place/${jobLat},${jobLng}`;
+  return `https://map.naver.com/v5/search/${linkName(jobTitle)}?c=${jobLng},${jobLat},17,0,0,0,dh`;
 }
 
 /**
- * Kakao Map Directions URL
+ * Kakao Map: the walking route from the user's position, or the place alone without one
  */
 export function getKakaoMapDirectionUrl(
   jobLat: number,
@@ -114,11 +122,9 @@ export function getKakaoMapDirectionUrl(
   userLng?: number
 ): string {
   if (userLat && userLng) {
-    return `https://map.kakao.com/link/from/${encodeURIComponent(
-      'Vị trí của tôi'
-    )},${userLat},${userLng}/to/${encodeURIComponent(jobTitle)},${jobLat},${jobLng}`;
+    return `https://map.kakao.com/link/by/walk/${linkName('Vị trí của tôi')},${userLat},${userLng}/${linkName(jobTitle)},${jobLat},${jobLng}`;
   }
-  return `https://map.kakao.com/link/to/${encodeURIComponent(jobTitle)},${jobLat},${jobLng}`;
+  return `https://map.kakao.com/link/to/${linkName(jobTitle)},${jobLat},${jobLng}`;
 }
 
 /**
@@ -132,7 +138,7 @@ export function getGoogleMapDirectionUrl(
   userLng?: number
 ): string {
   if (userLat && userLng) {
-    return `https://www.google.com/maps/dir/?api=1&origin=${userLat},${userLng}&destination=${jobLat},${jobLng}&travelmode=transit`;
+    return `https://www.google.com/maps/dir/?api=1&origin=${userLat},${userLng}&destination=${jobLat},${jobLng}&travelmode=walking`;
   }
   return `https://www.google.com/maps/search/?api=1&query=${jobLat},${jobLng}`;
 }
