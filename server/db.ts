@@ -4,6 +4,7 @@
  */
 
 import 'dotenv/config';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { createAdminClient } from '@supabase/server/core';
@@ -443,403 +444,213 @@ function writeLocalDb(data: any): void {
   }
 }
 
-// Initialize and seed database if completely empty
-export async function initializeDb(): Promise<void> {
-  // Always ensure local db.json exists and is seeded if empty
-  if (!fs.existsSync(DB_FILE)) {
-    writeLocalDb({
-      users: DEFAULT_USERS,
-      jobs: DEFAULT_JOBS,
-      bookmarks: DEFAULT_BOOKMARKS,
-      crawlerLogs: DEFAULT_CRAWLER_LOGS
-    });
-  }
-  console.log('[Database] Local fallback storage initialized.');
+// ---------------------------------------------------------------------------
+// Storage: Supabase is the only store whenever it is configured, so a redeploy (which
+// replaces the container and its files) loses nothing, and a Supabase failure is reported
+// instead of silently showing sample data. db.json is only for local development without
+// Supabase credentials.
+// ---------------------------------------------------------------------------
+const useSupabase = (): boolean => supabase !== null;
+
+function fail(op: string, error: any): never {
+  console.error(`[Supabase] ${op} failed:`, error?.message || error);
+  throw new Error(`Không thể kết nối cơ sở dữ liệu (${op}). Vui lòng thử lại sau.`);
 }
 
-// JOBS APIs
-export async function getJobs(): Promise<Job[]> {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('jobs')
-        .select('*')
-        .order('created_at', { ascending: false });
+const newId = (prefix: string) => `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
 
-      if (error) throw error;
-
-      const jobs = (data || []).map(mapJobFromDb);
-
-      // Sync with local db.json
-      const local = readLocalDb();
-      local.jobs = jobs;
-      writeLocalDb(local);
-
-      return jobs;
-    } catch (err: any) {
-      console.warn('[Supabase] getJobs warning (falling back to local DB):', err.message);
-    }
+export async function initializeDb(): Promise<void> {
+  if (useSupabase()) {
+    const status = await checkSupabaseConnection();
+    console.log(`[Database] Using Supabase only. ${status.message}`);
+    return;
   }
+  if (!fs.existsSync(DB_FILE)) {
+    writeLocalDb({ users: DEFAULT_USERS, jobs: DEFAULT_JOBS, bookmarks: DEFAULT_BOOKMARKS, crawlerLogs: DEFAULT_CRAWLER_LOGS });
+  }
+  console.log('[Database] No Supabase credentials: using local db.json (development only).');
+}
 
+// JOBS
+export async function getJobs(): Promise<Job[]> {
+  if (useSupabase()) {
+    const { data, error } = await supabase.from('jobs').select('*').order('created_at', { ascending: false });
+    if (error) fail('getJobs', error);
+    return (data || []).map(mapJobFromDb);
+  }
   const local = readLocalDb();
   return local.jobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
+/** One job, counting the view. */
 export async function getJobById(id: string): Promise<Job | undefined> {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('jobs')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-
-      if (error) throw error;
-      if (!data) {
-        const local = readLocalDb();
-        return local.jobs.find(j => j.id === id);
-      }
-
-      const job = mapJobFromDb(data);
-      const newViews = (job.views || 0) + 1;
-
-      // Update views in background / async
-      supabase
-        .from('jobs')
-        .update({ views: newViews })
-        .eq('id', id)
-        .then(({ error: uErr }: any) => {
-          if (uErr) console.warn('[Supabase] Failed to update views:', uErr.message);
-        });
-
-      return { ...job, views: newViews };
-    } catch (err: any) {
-      console.warn('[Supabase] getJobById warning (falling back to local DB):', err.message);
-    }
+  if (useSupabase()) {
+    const { data, error } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle();
+    if (error) fail('getJobById', error);
+    if (!data) return undefined;
+    const job = mapJobFromDb(data);
+    // Atomic increment when the SQL function exists; a plain update otherwise
+    const rpc = await supabase.rpc('increment_job_views', { p_job_id: id });
+    if (!rpc.error && typeof rpc.data === 'number') return { ...job, views: rpc.data };
+    const views = (job.views || 0) + 1;
+    await supabase.from('jobs').update({ views }).eq('id', id);
+    return { ...job, views };
   }
-
   const local = readLocalDb();
-  const jobIndex = local.jobs.findIndex(j => j.id === id);
-  if (jobIndex === -1) return undefined;
-  
-  // Update local views count
-  local.jobs[jobIndex].views = (local.jobs[jobIndex].views || 0) + 1;
+  const job = local.jobs.find(j => j.id === id);
+  if (!job) return undefined;
+  job.views = (job.views || 0) + 1;
   writeLocalDb(local);
-  return local.jobs[jobIndex];
+  return job;
 }
 
 export async function addJob(job: Omit<Job, 'id' | 'createdAt' | 'views'>): Promise<Job> {
-  const id = 'j_' + Math.random().toString(36).substr(2, 9);
-  const newJob: Job = {
-    ...job,
-    id,
-    createdAt: new Date().toISOString(),
-    views: 0
-  };
-
-  // 1. Save to local DB first
+  const newJob: Job = { ...job, id: newId('j'), createdAt: new Date().toISOString(), views: 0 };
+  if (useSupabase()) {
+    const { error } = await supabase.from('jobs').insert(mapJobToDb(newJob));
+    if (error) fail('addJob', error);
+    return newJob;
+  }
   const local = readLocalDb();
   local.jobs.push(newJob);
   writeLocalDb(local);
-
-  // 2. Try saving to Supabase if available
-  if (supabase) {
-    try {
-      const { error } = await supabase
-        .from('jobs')
-        .insert(mapJobToDb(newJob));
-      if (error) throw error;
-    } catch (err: any) {
-      console.warn('[Supabase] addJob warning (saved to local db.json only):', err.message);
-    }
-  }
-
   return newJob;
 }
 
 export async function updateJobStatus(id: string, status: 'approved' | 'rejected'): Promise<Job | undefined> {
-  // Update local DB first
+  if (useSupabase()) {
+    const { data, error } = await supabase.from('jobs').update({ status }).eq('id', id).select().maybeSingle();
+    if (error) fail('updateJobStatus', error);
+    return data ? mapJobFromDb(data) : undefined;
+  }
   const local = readLocalDb();
-  const jobIndex = local.jobs.findIndex(j => j.id === id);
-  if (jobIndex !== -1) {
-    local.jobs[jobIndex].status = status;
-    writeLocalDb(local);
-  }
-
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('jobs')
-        .update({ status })
-        .eq('id', id)
-        .select()
-        .maybeSingle();
-
-      if (error) throw error;
-      if (data) {
-        return mapJobFromDb(data);
-      }
-    } catch (err: any) {
-      console.warn('[Supabase] updateJobStatus warning (updated in local db.json only):', err.message);
-    }
-  }
-
-  return jobIndex !== -1 ? local.jobs[jobIndex] : undefined;
+  const job = local.jobs.find(j => j.id === id);
+  if (!job) return undefined;
+  job.status = status;
+  writeLocalDb(local);
+  return job;
 }
 
 export async function deleteJob(id: string): Promise<boolean> {
-  // Update local DB first
+  if (useSupabase()) {
+    // Bookmarks go with the job (ON DELETE CASCADE); deleted explicitly too for older schemas
+    await supabase.from('bookmarks').delete().eq('job_id', id);
+    const { data, error } = await supabase.from('jobs').delete().eq('id', id).select('id');
+    if (error) fail('deleteJob', error);
+    return (data || []).length > 0;
+  }
   const local = readLocalDb();
+  const before = local.jobs.length;
   local.jobs = local.jobs.filter(j => j.id !== id);
   local.bookmarks = local.bookmarks.filter(b => b.jobId !== id);
   writeLocalDb(local);
-
-  if (supabase) {
-    try {
-      // Delete bookmarks first in Supabase
-      await supabase
-        .from('bookmarks')
-        .delete()
-        .eq('job_id', id);
-
-      // Delete job in Supabase
-      const { error } = await supabase
-        .from('jobs')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-    } catch (err: any) {
-      console.warn('[Supabase] deleteJob warning (deleted from local db.json only):', err.message);
-    }
-  }
-
-  return true;
+  return local.jobs.length < before;
 }
 
 // BOOKMARKS
 export async function getBookmarks(userId: string): Promise<Bookmark[]> {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('bookmarks')
-        .select('*')
-        .eq('user_id', userId);
-
-      if (error) throw error;
-
-      const bookmarks = (data || []).map(mapBookmarkFromDb);
-
-      // Sync with local db.json
-      const local = readLocalDb();
-      local.bookmarks = local.bookmarks.filter(b => b.userId !== userId).concat(bookmarks);
-      writeLocalDb(local);
-
-      return bookmarks;
-    } catch (err: any) {
-      console.warn('[Supabase] getBookmarks warning (falling back to local DB):', err.message);
-    }
+  if (useSupabase()) {
+    const { data, error } = await supabase.from('bookmarks').select('*').eq('user_id', userId);
+    if (error) fail('getBookmarks', error);
+    return (data || []).map(mapBookmarkFromDb);
   }
-
-  const local = readLocalDb();
-  return local.bookmarks.filter(b => b.userId === userId);
+  return readLocalDb().bookmarks.filter(b => b.userId === userId);
 }
 
 export async function toggleBookmark(userId: string, jobId: string): Promise<{ bookmarked: boolean; bookmarkId?: string }> {
-  const local = readLocalDb();
-  const existingIndex = local.bookmarks.findIndex(b => b.userId === userId && b.jobId === jobId);
-  
-  let isBookmarked = false;
-  let newBookmarkId: string | undefined = undefined;
-
-  if (existingIndex !== -1) {
-    local.bookmarks.splice(existingIndex, 1);
-    writeLocalDb(local);
-  } else {
-    newBookmarkId = 'b_' + Math.random().toString(36).substr(2, 9);
-    const newBookmark: Bookmark = {
-      id: newBookmarkId,
-      userId,
-      jobId,
-      createdAt: new Date().toISOString()
-    };
-    local.bookmarks.push(newBookmark);
-    writeLocalDb(local);
-    isBookmarked = true;
-  }
-
-  if (supabase) {
-    try {
-      if (existingIndex !== -1) {
-        const { error } = await supabase
-          .from('bookmarks')
-          .delete()
-          .eq('user_id', userId)
-          .eq('job_id', jobId);
-        if (error) throw error;
-      } else if (newBookmarkId) {
-        const newBookmark: Bookmark = {
-          id: newBookmarkId,
-          userId,
-          jobId,
-          createdAt: new Date().toISOString()
-        };
-        const { error } = await supabase
-          .from('bookmarks')
-          .insert(mapBookmarkToDb(newBookmark));
-        if (error) throw error;
-      }
-    } catch (err: any) {
-      console.warn('[Supabase] toggleBookmark warning (updated in local db.json only):', err.message);
+  if (useSupabase()) {
+    const { data: existing, error } = await supabase.from('bookmarks').select('id').eq('user_id', userId).eq('job_id', jobId).maybeSingle();
+    if (error) fail('toggleBookmark', error);
+    if (existing) {
+      const del = await supabase.from('bookmarks').delete().eq('id', existing.id);
+      if (del.error) fail('toggleBookmark', del.error);
+      return { bookmarked: false };
     }
+    const bookmark: Bookmark = { id: newId('b'), userId, jobId, createdAt: new Date().toISOString() };
+    const ins = await supabase.from('bookmarks').insert(mapBookmarkToDb(bookmark));
+    if (ins.error) fail('toggleBookmark', ins.error);
+    return { bookmarked: true, bookmarkId: bookmark.id };
   }
-
-  return { bookmarked: isBookmarked, bookmarkId: newBookmarkId };
+  const local = readLocalDb();
+  const index = local.bookmarks.findIndex(b => b.userId === userId && b.jobId === jobId);
+  if (index !== -1) {
+    local.bookmarks.splice(index, 1);
+    writeLocalDb(local);
+    return { bookmarked: false };
+  }
+  const bookmark: Bookmark = { id: newId('b'), userId, jobId, createdAt: new Date().toISOString() };
+  local.bookmarks.push(bookmark);
+  writeLocalDb(local);
+  return { bookmarked: true, bookmarkId: bookmark.id };
 }
 
-// USERS AUTH
+// USERS
 export async function getUsers(): Promise<User[]> {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('*');
-
-      if (error) throw error;
-
-      const users = (data || []).map(mapUserFromDb);
-
-      // Sync with local db.json
-      const local = readLocalDb();
-      local.users = users;
-      writeLocalDb(local);
-
-      return users;
-    } catch (err: any) {
-      console.warn('[Supabase] getUsers warning (falling back to local DB):', err.message);
-    }
+  if (useSupabase()) {
+    const { data, error } = await supabase.from('users').select('*');
+    if (error) fail('getUsers', error);
+    return (data || []).map(mapUserFromDb);
   }
-
-  const local = readLocalDb();
-  return local.users;
+  return readLocalDb().users;
 }
 
 export async function loginOrRegister(email: string, name: string, avatar: string, role: 'user' | 'admin' = 'user'): Promise<User> {
-  const local = readLocalDb();
-  const existingUser = local.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-  
-  if (existingUser) {
-    return existingUser;
-  }
-
-  // Admin rights are decided per request from ADMIN_EMAILS (server/auth.ts), not stored here
-  const finalRole = role;
-  const id = 'u_' + Math.random().toString(36).substr(2, 9);
   const newUser: User = {
-    id,
+    id: newId('u'),
     name,
     email,
     avatar: avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-    role: finalRole,
+    // Admin rights are decided per request from ADMIN_EMAILS (server/auth.ts), not stored here
+    role,
     createdAt: new Date().toISOString()
   };
-
+  if (useSupabase()) {
+    const { data: existing, error } = await supabase.from('users').select('*').ilike('email', email).maybeSingle();
+    if (error) fail('loginOrRegister', error);
+    if (existing) return mapUserFromDb(existing);
+    const ins = await supabase.from('users').insert(mapUserToDb(newUser));
+    if (ins.error) fail('loginOrRegister', ins.error);
+    return newUser;
+  }
+  const local = readLocalDb();
+  const existing = local.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  if (existing) return existing;
   local.users.push(newUser);
   writeLocalDb(local);
-
-  if (supabase) {
-    try {
-      const { error } = await supabase
-        .from('users')
-        .insert(mapUserToDb(newUser));
-      if (error) throw error;
-    } catch (err: any) {
-      console.warn('[Supabase] loginOrRegister warning (saved to local db.json only):', err.message);
-    }
-  }
-
   return newUser;
 }
 
-// CRAWLER LOGS
+// CRAWLER / PARSER LOGS (kept to the latest 50)
 export async function getCrawlerLogs(): Promise<CrawlerLog[]> {
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('crawler_logs')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      const logs = (data || []).map(mapLogFromDb);
-
-      const local = readLocalDb();
-      local.crawlerLogs = logs;
-      writeLocalDb(local);
-
-      return logs;
-    } catch (err: any) {
-      console.warn('[Supabase] getCrawlerLogs warning (falling back to local DB):', err.message);
-    }
+  if (useSupabase()) {
+    const { data, error } = await supabase.from('crawler_logs').select('*').order('created_at', { ascending: false }).limit(50);
+    if (error) fail('getCrawlerLogs', error);
+    return (data || []).map(mapLogFromDb);
   }
-
-  const local = readLocalDb();
-  return local.crawlerLogs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return readLocalDb().crawlerLogs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
+/** Logs never break the request that writes them. */
 export async function addCrawlerLog(source: string, status: 'success' | 'failed', message: string): Promise<CrawlerLog> {
-  const id = 'l_' + Math.random().toString(36).substr(2, 9);
-  const newLog: CrawlerLog = {
-    id,
-    source,
-    status,
-    message,
-    createdAt: new Date().toISOString()
-  };
-
-  // Save to local
-  const local = readLocalDb();
-  local.crawlerLogs.push(newLog);
-  if (local.crawlerLogs.length > 50) {
-    local.crawlerLogs.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    local.crawlerLogs = local.crawlerLogs.slice(0, 50);
-  }
-  writeLocalDb(local);
-
-  if (supabase) {
-    try {
-      const { error } = await supabase
-        .from('crawler_logs')
-        .insert(mapLogToDb(newLog));
-      if (error) throw error;
-
-      // Optional async pruning in Supabase
-      supabase
-        .from('crawler_logs')
-        .select('id', { count: 'exact', head: true })
-        .then(({ count, error: countErr }: any) => {
-          if (!countErr && count && count > 50) {
-            supabase
-              .from('crawler_logs')
-              .select('id')
-              .order('created_at', { ascending: false })
-              .range(50, 100)
-              .then(({ data: oldLogs }: any) => {
-                if (oldLogs && oldLogs.length > 0) {
-                  const idsToDelete = oldLogs.map((l: any) => l.id);
-                  supabase
-                    .from('crawler_logs')
-                    .delete()
-                    .in('id', idsToDelete);
-                }
-              });
-          }
-        });
-    } catch (err: any) {
-      console.warn('[Supabase] addCrawlerLog warning (saved to local db.json only):', err.message);
+  const log: CrawlerLog = { id: newId('l'), source, status, message, createdAt: new Date().toISOString() };
+  if (useSupabase()) {
+    const { error } = await supabase.from('crawler_logs').insert(mapLogToDb(log));
+    if (error) {
+      console.warn('[Supabase] addCrawlerLog failed:', error.message);
+      return log;
     }
+    // Trim to the newest 50 in the background
+    supabase.from('crawler_logs').select('id').order('created_at', { ascending: false }).range(50, 200)
+      .then(({ data }: any) => {
+        if (data?.length) supabase.from('crawler_logs').delete().in('id', data.map((l: any) => l.id)).then(() => {});
+      });
+    return log;
   }
-
-  return newLog;
+  const local = readLocalDb();
+  local.crawlerLogs.push(log);
+  local.crawlerLogs = local.crawlerLogs
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 50);
+  writeLocalDb(local);
+  return log;
 }

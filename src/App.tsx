@@ -22,7 +22,6 @@ import ContactModal from './components/ContactModal';
 import Logo from './components/Logo';
 import AuthModal from './components/AuthModal';
 import { Job, User, Bookmark, RecentSearchItem } from './types';
-import { INITIAL_JOBS } from './data/initialJobs';
 import { auth, db, logoutFirebase } from './lib/firebase';
 import { apiFetch, fetchServerRole, getDevToken, setDevToken, DEV_TEST_PROFILES, DevTestAccount } from './lib/api';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
@@ -56,9 +55,11 @@ const formatFilterLabel = (
 };
 
 export default function App() {
-  const [jobs, setJobs] = useState<Job[]>(() => INITIAL_JOBS.filter(j => j.status === 'approved'));
-  const [adminJobsList, setAdminJobsList] = useState<Job[]>(INITIAL_JOBS); // Full list including pending for Admin
-  const [loading, setLoading] = useState(false);
+  // Jobs come only from the server (Supabase); nothing is shown until they arrive
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [adminJobsList, setAdminJobsList] = useState<Job[]>([]); // Full list including pending for Admin
+  const [loading, setLoading] = useState(true);
+  const [jobsError, setJobsError] = useState<string | null>(null);
   const [sidebarTab, setSidebarTab] = useState<'list' | 'chart'>('list');
   
   // Auth state (Default to guest / null)
@@ -283,20 +284,12 @@ export default function App() {
 
       const res = await fetch(`/api/jobs?${params.toString()}`).catch(() => null);
       if (res && res.ok) {
-        const data = await res.json();
-        setJobs(data);
+        setJobs(await res.json());
+        setJobsError(null);
       } else {
-        // Fallback to local filtering if backend unavailable
-        let filtered = INITIAL_JOBS.filter(j => j.status === 'approved');
-        if (searchQuery) {
-          const s = searchQuery.toLowerCase();
-          filtered = filtered.filter(j => j.title.toLowerCase().includes(s) || j.company.toLowerCase().includes(s) || j.city.toLowerCase().includes(s));
-        }
-        if (cityFilter && cityFilter !== 'All') filtered = filtered.filter(j => j.city.toLowerCase() === cityFilter.toLowerCase());
-        if (categoryFilter && categoryFilter !== 'All') filtered = filtered.filter(j => j.category === categoryFilter);
-        if (salaryTypeFilter && salaryTypeFilter !== 'All') filtered = filtered.filter(j => j.salaryType === salaryTypeFilter);
-        if (minSalaryFilter) filtered = filtered.filter(j => j.salary >= parseInt(minSalaryFilter, 10));
-        setJobs(filtered);
+        // Keep what is on screen and say so; never substitute sample data
+        const body = res ? await res.json().catch(() => null) : null;
+        setJobsError(body?.error || 'Không tải được tin tuyển dụng. Kiểm tra kết nối mạng.');
       }
     } catch (err) {
       console.warn('Jobs fetch notice:', err);
@@ -313,9 +306,9 @@ export default function App() {
       const r2 = await apiFetch('/api/jobs?status=pending').catch(() => null);
       const r3 = await apiFetch('/api/jobs?status=rejected').catch(() => null);
       
-      const approved = r1 && r1.ok ? await r1.json() : INITIAL_JOBS.filter(j => j.status === 'approved');
-      const pending = r2 && r2.ok ? await r2.json() : INITIAL_JOBS.filter(j => j.status === 'pending');
-      const rejected = r3 && r3.ok ? await r3.json() : INITIAL_JOBS.filter(j => j.status === 'rejected');
+      const approved = r1 && r1.ok ? await r1.json() : [];
+      const pending = r2 && r2.ok ? await r2.json() : [];
+      const rejected = r3 && r3.ok ? await r3.json() : [];
 
       setAdminJobsList([...pending, ...approved, ...rejected]);
     } catch (err) {
@@ -516,6 +509,8 @@ export default function App() {
           jobs={displayedJobs}
           allJobs={jobs}
           loading={loading}
+          error={jobsError}
+          onRetry={fetchJobs}
           selectedJob={selectedJob}
           onSelectJob={setSelectedJob}
           bookmarkedIds={bookmarkedIds}

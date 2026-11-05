@@ -27,6 +27,8 @@ interface JobsHomeProps {
   jobs: Job[];
   allJobs: Job[];
   loading: boolean;
+  error?: string | null;
+  onRetry?: () => void;
   selectedJob: Job | null;
   onSelectJob: (job: Job | null) => void;
   bookmarkedIds: string[];
@@ -84,7 +86,7 @@ function useIsDesktop() {
 
 export default function JobsHome(props: JobsHomeProps) {
   const {
-    jobs, allJobs, loading, selectedJob, onSelectJob, bookmarkedIds, onToggleBookmark,
+    jobs, allJobs, loading, error, onRetry, selectedJob, onSelectJob, bookmarkedIds, onToggleBookmark,
     userLocation, onLocateUser, isLocating,
     searchQuery, setSearchQuery, cityFilter, setCityFilter, categoryFilter, setCategoryFilter,
     salaryTypeFilter, setSalaryTypeFilter, minSalaryFilter, setMinSalaryFilter,
@@ -387,6 +389,15 @@ export default function JobsHome(props: JobsHomeProps) {
                 </li>
               ))}
             </ul>
+          ) : error && jobs.length === 0 ? (
+            <div className="px-4 lg:px-6 py-6">
+              <div className="bg-white rounded-2xl border border-rose-200 shadow-sm px-5 py-6 text-center" role="alert">
+                <p className="text-sm text-slate-800">{error}</p>
+                <button type="button" onClick={onRetry} className="mt-3 h-10 px-5 rounded-full bg-blue-600 text-white text-sm font-bold cursor-pointer">
+                  Thử lại
+                </button>
+              </div>
+            </div>
           ) : sortedJobs.length === 0 ? (
             <div className="px-4 lg:px-6 py-6">
               <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm px-5 py-6 text-center">
