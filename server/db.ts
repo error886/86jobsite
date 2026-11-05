@@ -10,6 +10,11 @@ import { createAdminClient } from '@supabase/server/core';
 import { User, Job, Bookmark, CrawlerLog } from '../src/types';
 
 // --- SUPABASE CONFIGURATION ---
+// The client wants the project URL (https://<ref>.supabase.co). A REST endpoint pasted in its place
+// (".../rest/v1/") makes every query fail with "Invalid path specified in request URL", so trim it.
+if (process.env.SUPABASE_URL) {
+  process.env.SUPABASE_URL = process.env.SUPABASE_URL.trim().replace(/^["']|["']$/g, '').replace(/\/(rest\/v1)?\/?$/, '');
+}
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseSecretKey = process.env.SUPABASE_SECRET_KEY;
 
