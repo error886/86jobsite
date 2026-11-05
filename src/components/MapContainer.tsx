@@ -29,7 +29,20 @@ interface MapContainerProps {
   rightInset?: number;
 }
 
-const KAKAO_MAP_KEY: string = (import.meta as any).env?.VITE_KAKAO_MAP_KEY || '';
+// Kakao JS key: baked in at build time when available, otherwise read from the server at runtime
+const BUILD_KAKAO_MAP_KEY: string = (import.meta as any).env?.VITE_KAKAO_MAP_KEY || '';
+let KAKAO_MAP_KEY = BUILD_KAKAO_MAP_KEY;
+
+async function resolveKakaoKey(): Promise<string> {
+  if (KAKAO_MAP_KEY) return KAKAO_MAP_KEY;
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) KAKAO_MAP_KEY = (await res.json()).kakaoMapKey || '';
+  } catch {
+    // offline or no server: the Leaflet fallback takes over
+  }
+  return KAKAO_MAP_KEY;
+}
 
 // Kakao zoom levels run the other way from Leaflet: 1 is street level, 14 is the whole country
 const KAKAO_LEVEL_COUNTRY = 13;
@@ -78,11 +91,10 @@ const USER_MARKER_HTML = `<span class="user-dot" aria-hidden="true"></span>`;
 /** Loads the Kakao Maps JS SDK once. Resolves false if the key is missing, the domain is not registered or the network blocks it. */
 let kakaoLoadPromise: Promise<boolean> | null = null;
 function loadKakaoSdk(): Promise<boolean> {
-  if (!KAKAO_MAP_KEY) return Promise.resolve(false);
   if (window.kakao?.maps?.Map) return Promise.resolve(true);
   if (kakaoLoadPromise) return kakaoLoadPromise;
 
-  kakaoLoadPromise = new Promise<boolean>((resolve) => {
+  kakaoLoadPromise = resolveKakaoKey().then(key => !key ? false : new Promise<boolean>((resolve) => {
     const timeout = setTimeout(() => resolve(false), 6000);
     const script = document.createElement('script');
     script.id = 'kakao-map-sdk';
@@ -104,7 +116,7 @@ function loadKakaoSdk(): Promise<boolean> {
       resolve(false);
     };
     document.head.appendChild(script);
-  });
+  }));
 
   return kakaoLoadPromise;
 }

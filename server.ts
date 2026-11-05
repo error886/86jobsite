@@ -86,6 +86,13 @@ app.get('/api/auth/me', requireAuth, (req: Request, res: Response) => {
   res.json({ uid: user.uid, email: user.email, role: user.isAdmin ? 'admin' : 'user' });
 });
 
+// GET /api/config - Public browser settings read at runtime, so a deploy does not depend on build arguments.
+// The Kakao JavaScript key is a public, domain-restricted key (Kakao only accepts it from registered sites).
+app.get('/api/config', (req: Request, res: Response) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json({ kakaoMapKey: process.env.VITE_KAKAO_MAP_KEY || process.env.KAKAO_MAP_KEY || '' });
+});
+
 // GET /api/auth/dev-status - Whether local test accounts are on (development server with DEV_AUTH=1 only)
 app.get('/api/auth/dev-status', (req: Request, res: Response) => {
   res.json({ enabled: DEV_AUTH_ENABLED });
