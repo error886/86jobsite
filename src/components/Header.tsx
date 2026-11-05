@@ -49,7 +49,7 @@ export default function Header({
   };
 
   return (
-    <header className="sticky top-0 z-[1000] w-full bg-surface border-b border-line">
+    <header className={`sticky top-0 ${menuOpen ? 'z-[3000]' : 'z-[1000]'} w-full bg-surface border-b border-line`}>
       <div className="h-12 lg:h-14 px-4 lg:px-6 flex items-center justify-between gap-4">
         <button type="button" onClick={() => go('jobs')} className="flex items-center gap-2 cursor-pointer" aria-label="86Job, về bản đồ việc làm">
           <Logo className="h-7 lg:h-8 w-auto" />

@@ -10,6 +10,7 @@ import MapContainer from '../MapContainer';
 import JobRow from './JobRow';
 import FilterSheet from './FilterSheet';
 import { calculateDistanceKm } from '../../utils/geo';
+import { DETAIL_SHEET_RATIO } from '../JobDetailDrawer';
 import { CATEGORY_LABELS, formatKRW, isUnderMinimum } from '../../utils/wage';
 
 /*
@@ -65,7 +66,7 @@ const CATEGORY_CHIPS: { id: 'All' | JobCategory; label: string }[] = [
 
 const SHEET_HEIGHTS: Record<SheetState, string> = {
   peek: '132px',
-  half: '58%',
+  half: '50%',
   full: 'calc(100% - 64px)'
 };
 
@@ -167,7 +168,7 @@ export default function JobsHome(props: JobsHomeProps) {
       return;
     }
     const h = d.startH - (e.clientY - d.startY);
-    const targets: [SheetState, number][] = [['peek', 132], ['half', d.parentH * 0.58], ['full', d.parentH - 64]];
+    const targets: [SheetState, number][] = [['peek', 132], ['half', d.parentH * 0.5], ['full', d.parentH - 64]];
     targets.sort((a, b) => Math.abs(a[1] - h) - Math.abs(b[1] - h));
     setSheet(targets[0][0]);
   };
@@ -182,8 +183,8 @@ export default function JobsHome(props: JobsHomeProps) {
     setLocateTick(t => t + 1);
   };
 
-  // The job detail covers the lower 72% of a phone, or a 420px column on desktop
-  const mapBottomInset = isDesktop ? 0 : selectedJob ? Math.round(window.innerHeight * 0.72) - 48 : Math.round(sheetPx);
+  // The job card covers the lower half of a phone, or a 420px column on desktop
+  const mapBottomInset = isDesktop ? 0 : selectedJob ? Math.round(window.innerHeight * DETAIL_SHEET_RATIO) : Math.round(sheetPx);
   const mapRightInset = isDesktop && selectedJob ? 420 : 0;
 
   const searchField = (

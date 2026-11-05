@@ -37,6 +37,8 @@ const KAKAO_LEVEL_NEIGHBORHOOD = 4;
 // Space kept clear above the pins for the floating search and chip rows on a phone
 const TOP_INSET_PHONE = 116;
 const SIDE_INSET = 40;
+// Radius the map opens on around the user's position
+const USER_VIEW_RADIUS_M = 1000;
 
 // ----------------------------------------------------
 // MARKER HTML (shared by Kakao and Leaflet). Styled in index.css (.job-pin).
@@ -72,12 +74,6 @@ function clusterPinElement(count: number, onClick: () => void): HTMLElement {
 }
 
 const USER_MARKER_HTML = `<span class="user-dot" aria-hidden="true"></span>`;
-
-function walkBadgeHtml(mins: number, straight: boolean): string {
-  return straight
-    ? `<span class="walk-badge walk-badge-straight num">~${mins} phút · đường chim bay</span>`
-    : `<span class="walk-badge num">${mins} phút đi bộ</span>`;
-}
 
 /** Loads the Kakao Maps JS SDK once. Resolves false if the key is missing, the domain is not registered or the network blocks it. */
 let kakaoLoadPromise: Promise<boolean> | null = null;
@@ -175,23 +171,38 @@ export default function MapContainer({
     }
   };
 
-  /** Fit every pin into the part of the map the sheet and the search rows leave visible. */
-  const fitAll = () => {
-    const placed = placedRef.current;
-    if (placed.length === 0) return;
+  /** Fit points into the part of the map the sheet and the search rows leave visible. */
+  const fitPoints = (points: [number, number][], maxZoom = 14) => {
+    if (points.length === 0) return;
     if (mapEngine === 'kakao' && kakaoMapRef.current) {
       const kakao = window.kakao;
       const bounds = new kakao.maps.LatLngBounds();
-      placed.forEach(j => bounds.extend(new kakao.maps.LatLng(j.latitude, j.longitude)));
-      kakaoMapRef.current.setBounds(bounds, topInset(), SIDE_INSET, insetRef.current + SIDE_INSET, SIDE_INSET);
+      points.forEach(([lat, lng]) => bounds.extend(new kakao.maps.LatLng(lat, lng)));
+      kakaoMapRef.current.setBounds(bounds, topInset(), SIDE_INSET + rightInsetRef.current, insetRef.current + SIDE_INSET, SIDE_INSET);
     } else if (mapEngine === 'leaflet' && leafletMapRef.current) {
-      const bounds = L.latLngBounds(placed.map(j => [j.latitude, j.longitude] as [number, number]));
-      leafletMapRef.current.fitBounds(bounds, {
+      leafletMapRef.current.fitBounds(L.latLngBounds(points), {
         paddingTopLeft: [SIDE_INSET, topInset()],
-        paddingBottomRight: [SIDE_INSET, insetRef.current + SIDE_INSET],
-        maxZoom: 14
+        paddingBottomRight: [SIDE_INSET + rightInsetRef.current, insetRef.current + SIDE_INSET],
+        maxZoom
       });
     }
+  };
+
+  /** Every job pin. */
+  const fitAll = () => fitPoints(placedRef.current.map(j => [j.latitude, j.longitude] as [number, number]));
+
+  /** About 1 km in every direction around the user, the way map apps open on "near me". */
+  const fitAroundUser = (lat: number, lng: number) => {
+    const dLat = USER_VIEW_RADIUS_M / 111320;
+    const dLng = USER_VIEW_RADIUS_M / (111320 * Math.cos((lat * Math.PI) / 180));
+    fitPoints([[lat - dLat, lng - dLng], [lat + dLat, lng + dLng]], 16);
+  };
+
+  // Once the map has opened on the user's surroundings, filters and sheet changes keep that view
+  const userViewRef = useRef(false);
+  const refitView = () => {
+    if (userViewRef.current && userLocation) fitAroundUser(userLocation.lat, userLocation.lng);
+    else fitAll();
   };
 
   // 1. Load Kakao Map, fall back to Leaflet if it is unavailable
@@ -289,14 +300,14 @@ export default function MapContainer({
         leafletPinsRef.current[job.id] = marker;
       });
     }
-    fitAll();
+    if (!userViewRef.current) fitAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, mapEngine]);
 
   // Refit once the sheet's height settles (it is measured after the first fit), unless a job is open
   useEffect(() => {
     if (selectedIdRef.current) return;
-    const t = setTimeout(fitAll, 250);
+    const t = setTimeout(refitView, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bottomInset]);
@@ -421,12 +432,21 @@ export default function MapContainer({
     }
   }, [userLocation, mapEngine]);
 
+  // 5b. First known position: open the map about 1 km around it (unless a job is already open)
+  useEffect(() => {
+    if (userViewRef.current || !userLocation || mapEngine === 'loading' || selectedIdRef.current) return;
+    userViewRef.current = true;
+    fitAroundUser(userLocation.lat, userLocation.lng);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userLocation, mapEngine]);
+
   // 6. "Về vị trí của tôi": move once the position is known
   const handledTickRef = useRef(0);
   useEffect(() => {
     if (locateTick > handledTickRef.current && userLocation && mapEngine !== 'loading') {
       handledTickRef.current = locateTick;
-      focusPoint(userLocation.lat, userLocation.lng);
+      userViewRef.current = true;
+      fitAroundUser(userLocation.lat, userLocation.lng);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locateTick, userLocation, mapEngine]);
@@ -445,7 +465,6 @@ export default function MapContainer({
 
     fetchWalkingRoute(userLocation.lat, userLocation.lng, selectedJob.latitude, selectedJob.longitude).then((route) => {
       if (!isMounted) return;
-      const mins = Math.max(1, Math.round(route.durationSeconds / 60));
       const straight = route.source === 'straight';
 
       if (mapEngine === 'kakao' && kakaoMapRef.current) {
@@ -453,14 +472,7 @@ export default function MapContainer({
         const path = route.coordinates.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng));
         const overlays = [
           ...(straight ? [] : [new kakao.maps.Polyline({ path, strokeWeight: 10, strokeColor: '#1e3a8a', strokeOpacity: 1, strokeStyle: 'solid', zIndex: 5 })]),
-          new kakao.maps.Polyline({ path, strokeWeight: straight ? 4 : 6, strokeColor: '#2563eb', strokeOpacity: 1, strokeStyle: straight ? 'shortdash' : 'solid', zIndex: 6 }),
-          new kakao.maps.CustomOverlay({
-            position: new kakao.maps.LatLng(route.midpoint[0], route.midpoint[1]),
-            content: walkBadgeHtml(mins, straight),
-            xAnchor: 0.5,
-            yAnchor: 0.5,
-            zIndex: 30
-          })
+          new kakao.maps.Polyline({ path, strokeWeight: straight ? 4 : 6, strokeColor: '#2563eb', strokeOpacity: 1, strokeStyle: straight ? 'shortdash' : 'solid', zIndex: 6 })
         ];
         overlays.forEach(o => o.setMap(kakaoMapRef.current));
         kakaoRouteRef.current = overlays;
@@ -470,15 +482,15 @@ export default function MapContainer({
         const map = leafletMapRef.current;
         const layers: L.Layer[] = [
           ...(straight ? [] : [L.polyline(route.coordinates, { color: '#1e3a8a', weight: 10, opacity: 0.95 })]),
-          L.polyline(route.coordinates, { color: '#2563eb', weight: straight ? 4 : 6, opacity: 1, dashArray: straight ? '8 8' : undefined }),
-          L.marker([route.midpoint[0], route.midpoint[1]], {
-            icon: L.divIcon({ html: walkBadgeHtml(mins, straight), className: 'walk-badge-wrap', iconSize: null as any }),
-            interactive: false
-          })
+          L.polyline(route.coordinates, { color: '#2563eb', weight: straight ? 4 : 6, opacity: 1, dashArray: straight ? '8 8' : undefined })
         ];
         layers.forEach(l => l.addTo(map));
         leafletRouteRef.current = layers;
       }
+
+      // Show the whole way from you to the job in the part of the map above the card.
+      // The walk time is in the card, not on the map, so nothing covers the pins.
+      fitPoints(route.coordinates, 17);
     });
 
     return () => {

@@ -262,42 +262,42 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-200">
+    <div className="max-w-4xl mx-auto space-y-5 sm:space-y-8 animate-in fade-in duration-200">
       
       {/* Title & Mode Switcher */}
-      <div className="text-center space-y-4">
-        <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-slate-950 tracking-tight">
-          Hệ thống Đăng tin tuyển dụng <span className="text-blue-600">86Job</span>
+      <div className="sm:text-center space-y-3 sm:space-y-4">
+        <h1 className="font-display text-xl sm:text-3xl font-extrabold text-slate-950 tracking-tight">
+          Đăng tin tuyển dụng <span className="text-blue-600">86Job</span>
         </h1>
-        <p className="text-sm sm:text-base text-slate-500 max-w-2xl mx-auto">
-          Tạo bài đăng nhanh chóng bằng Trí tuệ nhân tạo (AI) tự động trích xuất thông tin, hoặc tự điền biểu mẫu thủ công.
+        <p className="text-sm sm:text-base text-slate-500 max-w-2xl sm:mx-auto">
+          Dán bài tuyển dụng để AI tự điền thông tin, hoặc tự nhập vào biểu mẫu.
         </p>
 
         {/* Mode Toggle Buttons */}
-        <div className="inline-flex p-1.5 bg-slate-100 rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="grid grid-cols-2 sm:inline-flex w-full sm:w-auto p-1 bg-slate-100 rounded-2xl border border-slate-200/80 shadow-xs">
           <button
             type="button"
             onClick={handleOpenAIMode}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-2 px-3 sm:px-5 py-2.5 rounded-xl font-bold text-sm sm:text-xs whitespace-nowrap transition-all cursor-pointer ${
               mode === 'ai'
                 ? 'bg-white text-blue-600 shadow-sm border border-slate-200/60'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <Sparkles className="w-4 h-4 text-blue-600" />
-            <span>Đăng tin bằng AI (Tự động)</span>
+            <span>Dùng AI<span className="hidden sm:inline"> (Tự động)</span></span>
           </button>
           <button
             type="button"
             onClick={handleOpenManualForm}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-2 px-3 sm:px-5 py-2.5 rounded-xl font-bold text-sm sm:text-xs whitespace-nowrap transition-all cursor-pointer ${
               mode === 'manual'
                 ? 'bg-white text-blue-600 shadow-sm border border-slate-200/60'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <Edit3 className="w-4 h-4 text-slate-600" />
-            <span>Nhập thủ công (Form)</span>
+            <span>Tự nhập<span className="hidden sm:inline"> (Form)</span></span>
           </button>
         </div>
       </div>
@@ -330,25 +330,25 @@ export default function AIParsingTool({ currentUser, onJobCreated, setActiveTab,
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xl overflow-hidden grid grid-cols-1 md:grid-cols-12">
           
           {/* Left Input Field */}
-          <div className="md:col-span-7 p-6 sm:p-8 space-y-6 border-b md:border-b-0 md:border-r border-slate-100">
-            <div className="flex justify-between items-center">
-              <span className="flex items-center gap-1.5 text-sm font-bold text-slate-900 font-display uppercase tracking-wider">
+          <div className="md:col-span-7 p-4 sm:p-8 space-y-5 sm:space-y-6 border-b md:border-b-0 md:border-r border-slate-100">
+            <div className="flex justify-between items-baseline gap-3">
+              <span className="flex items-center gap-1.5 text-sm font-bold text-slate-900 font-display">
                 <FileText className="w-4 h-4 text-blue-500" />
                 Nội dung tuyển dụng thô
               </span>
-              <span className="text-xs text-slate-400">Yêu cầu ít nhất 10 ký tự</span>
+              <span className="text-xs text-slate-500 whitespace-nowrap">Tối thiểu 10 ký tự</span>
             </div>
 
             <textarea
               value={rawText}
               onChange={(e) => setRawText(e.target.value)}
               placeholder="Dán nội dung bài tuyển dụng hoặc link vào đây... Ví dụ: 'Tuyển phục vụ bàn quán cà phê ở Seoul Mapo-gu...'"
-              className="w-full h-56 p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:border-blue-500 outline-none transition-all resize-none text-sm leading-relaxed"
+              className="w-full h-44 sm:h-56 p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-slate-50 focus:bg-white focus:border-blue-500 outline-none transition-all resize-none text-sm leading-relaxed"
             />
 
             {/* Quick Paste Templates */}
             <div className="space-y-2">
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Bài viết mẫu (Thử nhanh)</p>
+              <p className="text-xs font-bold text-slate-500">Thử nhanh với bài mẫu</p>
               <div className="flex flex-wrap gap-2">
                 {templates.map((tpl, i) => (
                   <button

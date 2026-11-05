@@ -669,7 +669,7 @@ export default function App() {
       />
 
       {/* JOB DETAIL DRAWER WITH DISTANCE & DIRECTIONS */}
-      {selectedJob && (
+      {selectedJob && activeTab === 'jobs' && (
         <JobDetailDrawer
           job={selectedJob}
           onClose={() => setSelectedJob(null)}
